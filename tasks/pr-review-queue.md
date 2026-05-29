@@ -5,7 +5,7 @@ title: Morning PR review queue — triage, dependabot, /review
 type: recurring
 schedule: "30 6 * * 1-5"
 next_run: 2026-06-01T06:30:00+02:00
-last_run: 2026-05-29T13:54:46+02:00
+last_run: 2026-05-29T15:14:26+02:00
 created: 2026-05-29T18:00:00+02:00
 status: active
 ---
@@ -26,8 +26,10 @@ The task does three things, in priority order:
    (→ build-check + safe-to-merge / fix / comment, **never** `/review`).
 2. **Exclude** PRs where Gabor is only pulled in via the `hospitality`
    team (not requested by name) — list them so he knows, take no action.
-3. For **dependabot** PRs by name: classify safe-to-merge, auto-push
-   *mechanical* fixes when CI is red, or comment a diagnosis.
+3. For **dependabot** PRs by name: classify safe-to-merge, or when CI is
+   red, fix it in an isolated worktree and **auto-push when CI goes green
+   locally** (metadata or source edits alike — a source edit is pushed
+   but loudly flagged and never merged), else comment a diagnosis.
 
 Everything routes into one log Gabor reads with his coffee.
 
@@ -39,7 +41,7 @@ Read `logs/pr-review-state.json` (JSON; create `{ "reviewed": {},
 ```json
 {
   "reviewed":   { "kasadev/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>" } },
-  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|safe|rebase|recreate", "at": "<iso>" } }
+  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|rebase|recreate", "at": "<iso>" } }
 }
 ```
 
@@ -78,8 +80,10 @@ gh api /repos/kasadev/<repo>/pulls/<num> --jq '{
 ```
 
 `mergeable_state` of `dirty` means merge conflicts; `behind` means the
-branch trails its base. Both are best fixed by asking dependabot to
-rebase (Step 6a), not by a local lockfile push.
+branch trails its base. When `../<repo>` exists, both are best fixed by
+**resolving the conflict locally** (Step 6-resolve) — a rebase onto master
+in a worktree + lockfile regen. Only fall back to asking dependabot to
+rebase (Step 6a) when there's no local clone.
 
 Then bucket:
 
@@ -158,11 +162,12 @@ merge it (Gabor merges). Record `dependabot[...] = {sha, action:"safe"}`.
 **5b. Green + major/group →** add to **🟡 Green, review changelog**.
 No mutation.
 
-**5c. Failing →** attempt a mechanical fix, else comment. See Step 6.
+**5c. Failing →** attempt a fix, else comment. See Step 6.
 
 Skip entirely if `dependabot["kasadev/<repo>#<num>"].sha == head` AND its
-prior `action` was `commented`, `pushed`, or `safe` — already handled at
-this exact SHA; just note "already handled (no new commits)".
+prior `action` was `commented`, `pushed`, `pushed-source`, or `safe` —
+already handled at this exact SHA; just note "already handled (no new
+commits)".
 
 A prior `action` of `rebase` or `recreate` at the **same** head sha is
 **not** "handled" — it means we issued a `@dependabot` command and are
@@ -170,38 +175,55 @@ waiting for it to land. A command the bot *refuses* (e.g. "can't rebase")
 leaves the head sha unchanged forever, so blindly skipping would strand
 the PR as permanently dirty. Route these to **Step 6a-verify** first.
 
-### Step 6 — Failing dependabot: rebase, mechanical fix, or comment
+### Step 6 — Failing dependabot: rebase, fix + verify + push, or comment
 
 Only ever do this for **dependabot** PRs requested **by name**. Never
 touch a human-authored PR's branch. Pick the **first** path that applies:
 
 - **6a-verify — A bot command is already outstanding →** if state shows
   `action:"rebase"`/`"recreate"` at this same sha, check whether it landed
-  or was refused, and escalate (`rebase → recreate → comment`). Do this
-  before anything else so a refused command can't strand the PR.
-- **6a — Stale / conflicted branch →** ask dependabot to rebase (a bare
-  bot command comment). Cheapest; no checkout.
-- **6b/6c — Mechanical CI failure →** regenerate the lockfile in an
-  isolated worktree and push to the PR branch.
-- **6d — Anything else →** post a `[Claude]` diagnosis comment.
+  or was refused. If refused and `../<repo>` exists, prefer **6-resolve**
+  over another bot command. Do this before anything else so a refused
+  command can't strand the PR.
+- **6-resolve — Dirty / behind branch + local clone exists →** rebase onto
+  master in a worktree, resolve the (mechanical) conflicts yourself,
+  verify the full suite, force-push. **Preferred** fix for dirty PRs —
+  don't wait on dependabot when the conflict is mechanical.
+- **6a — Dirty / behind but NO local clone →** ask dependabot to rebase
+  (a bare bot command). Fallback only when we can't resolve locally.
+- **6b/6c — CI failure on a mergeable branch with a determinable fix →**
+  fix it in an isolated worktree, verify, and push (never merge).
+- **6d — Non-mechanical conflict, no verifiable fix, or no local clone →**
+  post a `[Claude]` diagnosis / hand-off comment.
 
-Define **mechanical** narrowly — exactly three allowed change classes,
-any combination of which may be needed to turn CI green:
+**What the fix may touch.** Whatever it takes to make CI green —
+including source files (`.ts`/`.tsx`/`.js`), config, and tests. There is
+no longer a "mechanical-only" file restriction. The change is instead
+**categorized**, which sets the push gate and how loudly it's surfaced:
 
-1. **Lockfile regeneration / dependency-manifest sync**
-   (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, or the
-   `package.json` dependency stanza).
-2. **A missing changelog entry** in `client/CHANGELOG.md` (see 6c-ii).
-   This is a very common dependabot failure — the
-   `dangoslen/dependabot-changelog-helper` action only runs on PRs that
-   touch `client/**`, so root-only bumps (typescript, eslint, release-it,
-   …) skip it and the changelog gate then fails.
+1. **Metadata-only fix** — touches ONLY lockfiles (`package-lock.json`,
+   `yarn.lock`, `pnpm-lock.yaml`), the `package.json` dependency stanza,
+   and/or a missing `client/CHANGELOG.md` entry (see 6c-ii). No runtime
+   behavior changes. **Push gate:** the originally-failing check(s) go
+   green locally. Surfaced under **🔧 Fixed automatically (lockfile/dep
+   sync)**.
+2. **Source-touching fix** — edits any other file (`.ts`/`.js`/config/
+   test) to satisfy the bump. Allowed even for **major** bumps, but the
+   bar is higher (6c-iii): the **entire** build + lint + test suite must
+   pass locally — not just the check that was failing — and the push MUST
+   carry the diff + a "review-the-semantics" banner (6e). Surfaced under
+   **🛠️ Fixed automatically — source edit (review semantics)**, never
+   mixed in with metadata fixes.
 
-If turning CI green requires editing any **other** file — a source file
-(`.ts`/`.tsx`/`.js`), config logic, tests — it is **NOT** mechanical →
-comment instead (6d). The only files this task may write on a dependabot
-branch are lockfiles, the `package.json` dependency stanza, and
-`client/CHANGELOG.md`.
+A note on the changelog gate (metadata case): the
+`dangoslen/dependabot-changelog-helper` action only runs on PRs that
+touch `client/**`, so root-only bumps (typescript, eslint, release-it, …)
+skip it and a `client/CHANGELOG.md` gate then fails — add the missing
+entry (6c-ii).
+
+**The push is never a merge.** Whatever the category, the task pushes to
+the PR's own head branch and leaves it green for Gabor to merge. It never
+merges, and never pushes to `master`/`main`/`dev`.
 
 **6a-verify. Did a previously-issued bot command land?**
 
@@ -230,19 +252,22 @@ wouldn't be here), an unchanged sha + a refusal reply means it's stuck:
   someone other than Dependabot". This happens when a `github-actions[bot]`
   commit sits on top of dependabot's commit (the most common cause in this
   org is the changelog-helper's "Updated Changelog" commit), so the branch
-  is no longer pure-dependabot and rebase is blocked. If we have **not**
-  already tried recreate (`action != "recreate"`), post the bare command:
+  is no longer pure-dependabot and rebase is blocked. **If `../<repo>`
+  exists, go to 6-resolve** — resolve the conflict locally instead of
+  asking dependabot again (`recreate` only re-triggers the changelog action
+  and the ladder churns). Only if there's **no local clone** and we have
+  **not** already tried recreate (`action != "recreate"`), post the bare
+  command:
 
   ```bash
   gh pr comment <num> --repo kasadev/<repo> --body '@dependabot recreate'
   ```
 
   `recreate` rebuilds the PR from scratch against current `master`,
-  overwriting the bot-blocking commits and resolving the conflicts. Post it
-  **bare, no `[Claude]` marker** (machine command — same exception as 6a).
-  Add the PR to "♻️ Rebase refused → asked dependabot to recreate" and
-  record `dependabot[...] = {sha, action:"recreate"}`. Stop here for this
-  PR.
+  overwriting the bot-blocking commits. Post it **bare, no `[Claude]`
+  marker** (machine command — same exception as 6a). Add the PR to "♻️
+  Rebase refused → asked dependabot to recreate" and record
+  `dependabot[...] = {sha, action:"recreate"}`. Stop here for this PR.
 - **Bot refused the recreate too**, OR `action` was already `recreate` and
   the sha still hasn't moved, OR any other terminal bot failure → the bot
   can't self-resolve this branch. Fall through to **6d** and post one
@@ -252,11 +277,13 @@ wouldn't be here), an unchanged sha + a refusal reply means it's stuck:
   "💬 Commented — needs you" and isn't retried at this sha. (Respect the
   6d idempotency rule — don't double-post at the same sha.)
 
-**6a. Stale or conflicted branch → ask dependabot to rebase:**
+**6a. Stale or conflicted branch → ask dependabot to rebase (no-clone fallback):**
 
-If `mergeable_state` is `dirty` (conflicts) or `behind` (trails base), or
-the failing checks are clearly a stale-branch artifact, comment the bare
-bot command and stop here for this PR:
+Use this **only when `../<repo>` is not available locally** — otherwise
+resolve the conflict yourself in 6-resolve. If `mergeable_state` is
+`dirty` (conflicts) or `behind` (trails base), or the failing checks are
+clearly a stale-branch artifact, comment the bare bot command and stop
+here for this PR:
 
 ```bash
 gh pr comment <num> --repo kasadev/<repo> --body '@dependabot rebase'
@@ -273,6 +300,60 @@ already shows `action:"rebase"` at this sha, do **not** silently skip;
 go to **Step 6a-verify** to check whether the rebase landed or the bot
 refused it (and escalate to `recreate` / a comment accordingly).
 
+**6-resolve. Dirty / conflicted branch → resolve it locally (preferred):**
+
+The primary path for a dependabot PR whose `mergeable_state` is `dirty`
+(conflicts) or `behind` (trails base), **whenever `../<repo>` exists.** Do
+NOT default to `@dependabot rebase` for these — a changelog-helper
+"Updated Changelog" commit usually blocks the bot's rebase, and `recreate`
+just re-triggers the same action, so the ladder churns without ever
+landing the PR. Resolve it yourself: the conflict in a dependabot bump is
+almost always confined to **mechanical** files (`package-lock.json`, the
+`package.json` dependency stanzas, `client/CHANGELOG.md`).
+
+Prepare the worktree (6b), then in `/tmp/pr-fix-<repo>-<num>`:
+
+1. `git fetch origin master` then `git rebase origin/master`.
+2. Resolve each conflict, but ONLY in mechanical files:
+   - **`package.json` (any workspace):** keep BOTH sides' dependency
+     changes; where the SAME package conflicts, take the **higher** semver;
+     where one side added/removed a dep the other didn't touch, keep that
+     change. Never touch non-dependency stanzas (scripts/config).
+   - **lockfile** (`package-lock.json`/`yarn.lock`/`pnpm-lock.yaml`): don't
+     hand-merge — take either side, then regenerate it with a fresh install
+     after the `package.json` files are reconciled.
+   - **`client/CHANGELOG.md`:** keep both entries, preserving the template
+     block (6c-ii rules).
+   - `git add -A && git rebase --continue` until the rebase completes.
+3. **Bail to 6d if** a conflict lands in ANY non-mechanical file
+   (`.ts`/`.js`/config logic/tests), or a `package.json` conflict is
+   structural rather than a plain version difference (needs human
+   judgment). `git rebase --abort`, clean the worktree (6f), and post a
+   `[Claude]` hand-off comment naming the file(s) that need manual
+   resolution. Record `action:"commented"`.
+4. Run the **full** suite — **build AND lint AND test, all three** (as in
+   6c-iii). Rebasing onto master frequently surfaces NEW failures the bump
+   didn't have before — a stricter `typescript-eslint` flagging fresh
+   `no-unnecessary-type-assertion` errors is exactly what slipped through
+   on css-api#136 when only `build` was run, leaving the branch CI-red
+   after the push. **Never push on a build-only check.** If lint/test now
+   fail on auto-fixable issues, fix them too (e.g. `eslint --fix`) and
+   re-run until all three are green; if a fix needs a non-mechanical edit,
+   treat it as a source-touching fix (6c-iii) but keep the same full-suite
+   gate. All three green?
+5. Force-push the rewritten branch:
+
+   ```bash
+   git -C /tmp/pr-fix-<repo>-<num> push --force-with-lease origin HEAD:<headRef>
+   ```
+
+   Record `dependabot[...] = {sha, action:"pushed"}`. Post a `[Claude]`
+   confirmation comment (6e): conflict resolved, lockfile regenerated, full
+   suite green locally. Add to "🔧 Fixed automatically (lockfile/dep sync)"
+   with a "(resolved merge conflict)" note. Clean the worktree (6f).
+
+If `../<repo>` does **not** exist locally → fall back to **6a**.
+
 **6b. Prepare an isolated worktree (never disturb Gabor's clone):**
 
 If `../<repo>` doesn't exist locally → skip the repro, go straight to
@@ -287,17 +368,20 @@ git -C ../<repo> fetch origin "pull/<num>/head:pr-<num>-fix"
 git -C ../<repo> worktree add -f /tmp/pr-fix-<repo>-<num> pr-<num>-fix
 ```
 
-**6c. Reproduce + attempt the mechanical fix in the worktree:**
+**6c. Reproduce + attempt the fix in the worktree:**
 
 Working in `/tmp/pr-fix-<repo>-<num>`:
 
-**6c-i. Lockfile / build:** Detect the package manager by lockfile and
+**6c-i. Install + reproduce:** Detect the package manager by lockfile and
 run a fresh install (`npm install` / `yarn install` / `pnpm install`) —
-this regenerates the lockfile if it was out of sync. Then run the repo's
-build + lint/typecheck the way CI does — infer from the failing check
-names in Step 5 (e.g. `lint-app`, `tests`, `Client Build`) and the
-repo's `package.json` scripts. Common: `npm run build`, `npm run lint`,
-`npm test`.
+this regenerates the lockfile if it was out of sync. Then reproduce the
+failing check locally — infer the command from the failing check names in
+Step 5 (e.g. `lint-app`, `tests`, `Client Build`, `typecheck`) and the
+repo's `package.json` scripts (common: `npm run build`, `npm run lint`,
+`npm test`, `npm run typecheck`). If a fresh install alone clears the
+check and `git diff --name-only` shows only metadata files, it's a
+**metadata-only fix** → go to the push decision below. If the check still
+fails and the cause is in source/config/tests, go to 6c-iii.
 
 **6c-ii. Missing changelog entry:** If a changelog check is failing (a
 check whose name contains `changelog`) and `client/CHANGELOG.md` exists,
@@ -334,36 +418,64 @@ add an entry — following the file's existing Keep-a-Changelog style:
   the edit. (This is a known failure mode: editors tend to "tidy up" the
   example away. Don't.)
 
-After 6c-i / 6c-ii, re-run the failing checks' local equivalents to
-confirm green, then decide:
-   - **Mechanical & green:** `git diff --name-only` shows ONLY allowed
-     files (lockfiles, `package.json` dep stanza, `client/CHANGELOG.md`)
-     AND the relevant checks now pass →
-     commit and push to the PR's own branch:
+**6c-iii. Source-touching fix (incl. major bumps):** If turning CI green
+needs a code/config/test edit, **understand the bump before editing**:
+read the dependency's changelog / migration notes across the version
+range (`bump X from <old> to <new>`) and the actual usage in the repo,
+then reason about whether the breakage is a pure type/signature
+adjustment or a real behavioral change. Make the **minimal** edit that
+both compiles and preserves the existing runtime contract — do not just
+silence the compiler. (Real example: sqs-consumer v15 widened
+`handleMessage`'s return type from `void` to `Message | undefined`; code
+that signals failure by *throwing* and returns `undefined` on success is
+unaffected at runtime, so the correct fix is a type adjustment, not a
+rewrite of message handling.)
 
-     ```bash
-     git -C /tmp/pr-fix-<repo>-<num> add -A
-     # Use a message that names what was actually done, e.g.
-     #   "chore: regenerate lockfile to fix CI"
-     #   "chore: add changelog entry"
-     #   "chore: regenerate lockfile + add changelog entry"
-     git -C /tmp/pr-fix-<repo>-<num> commit -m "<accurate message>
+After 6c-i / 6c-ii / 6c-iii, decide the push by category:
 
-     Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
-     git -C /tmp/pr-fix-<repo>-<num> push origin HEAD:<headRef>
-     ```
+- **Metadata-only & green:** `git diff --name-only` shows ONLY lockfiles,
+  the `package.json` dep stanza, and/or `client/CHANGELOG.md`, AND the
+  originally-failing check now passes locally → commit + push (below),
+  record `dependabot[...] = {sha, action:"pushed"}`, post a short
+  `[Claude]` confirmation comment (6e), add to "🔧 Fixed automatically
+  (lockfile/dep sync)".
 
-     Record `dependabot[...] = {sha, action:"pushed"}`. Then **also post
-     a short `[Claude]` PR comment** (see Step 6e format) saying what was
-     pushed and that CI is re-running. Add to "🔧 Fixed automatically".
-   - **Not mechanical, or still red after install:** go to 6d.
+- **Source-touching & FULL suite green:** the diff includes a source/
+  config/test file AND the **entire** build + lint + test suite passes
+  locally — run them all, not just the originally-failing check
+  (`npm run build && npm run lint && npm test`, or the repo's
+  equivalents; for nx monorepos like seam-sync that's
+  `npx nx run-many --target=build|lint|test --all`). All green → commit +
+  push (below), record `dependabot[...] = {sha, action:"pushed-source"}`,
+  post a `[Claude]` comment that **includes the diff and the
+  review-semantics banner** (6e), add to "🛠️ Fixed automatically —
+  source edit (review semantics)". If it's a **major** bump, say so
+  explicitly in both the comment and the log line.
+
+- **Still red, suite not fully green, or no determinable fix →** go to 6d.
+
+Commit + push (both categories — to the PR's own head branch, never
+merge, never `master`/`main`/`dev`):
+
+```bash
+git -C /tmp/pr-fix-<repo>-<num> add -A
+# Message names what was actually done, e.g.
+#   "chore: regenerate lockfile to fix CI"
+#   "chore: add changelog entry"
+#   "fix: adjust handleMessage typing for sqs-consumer v15"
+git -C /tmp/pr-fix-<repo>-<num> commit -m "<accurate message>
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+git -C /tmp/pr-fix-<repo>-<num> push origin HEAD:<headRef>
+```
 
 **6d. Comment a diagnosis (no push):**
 
-When a fix isn't mechanical (or there's no local clone), post one
-`[Claude]` comment (6e) with: the failing check(s), the root-cause one
--liner, and a concrete suggested patch. Add to "💬 Commented — needs
-you". Record `dependabot[...] = {sha, action:"commented"}`.
+When no fix can be verified green (the suite won't pass, the fix is
+ambiguous, or there's no local clone to reproduce in), post one `[Claude]`
+comment (6e) with: the failing check(s), the root-cause one-liner, and a
+concrete suggested patch. Add to "💬 Commented — needs you". Record
+`dependabot[...] = {sha, action:"commented"}`.
 
 Idempotency: before posting in 6d (or 6c's confirmation comment), if
 `dependabot["kasadev/<repo>#<num>"].sha == head` and a prior `[Claude]`
@@ -379,6 +491,14 @@ Gabor's own comments. Lead with the marker line, verbatim:
 
 <body: failing checks, root cause, suggested patch OR what was pushed>
 ```
+
+**When the push was a source-touching fix (6c-iii):** the comment body
+MUST additionally include (a) the pushed diff in a fenced ` ```diff `
+block, (b) which checks now pass locally (the full build+lint+test
+suite), and (c) this banner verbatim (drop the "on a MAJOR version bump"
+clause when the bump isn't major):
+
+> ⚠️ This pushed a **source-code** change to satisfy the bump, on a MAJOR version bump — green CI confirms it compiles and tests pass locally, but **review the runtime semantics before merging**, not just the green check.
 
 Post with `gh pr comment <num> --repo kasadev/<repo> --body-file <tmp>`.
 (The `@dependabot rebase` command in 6a is the **only** exception — it is
@@ -426,6 +546,8 @@ heading with `_None._` if empty, for a stable shape):
 - <repo>#<num> <title> — bot couldn't rebase (branch edited by github-actions). <url>
 ### 🔧 Fixed automatically (lockfile/dep sync pushed, CI re-running)
 - <repo>#<num> <title> — pushed: <one line>. <url>
+### 🛠️ Fixed automatically — source edit (review semantics before merging)
+- <repo>#<num> <title> — <MAJOR?> pushed source fix: <one line>; full build+lint+test green locally. <url>
 ### 💬 Commented — needs you
 - <repo>#<num> <title> — <root-cause one-liner>. <url>
 ### ✅ Safe to merge (green, single patch/minor)
@@ -472,8 +594,10 @@ If `attention` or `failure`, append a `## Notification` block:
 
 - title: PR review queue
 - subtitle: <N review · M dependabot · K safe-to-merge>
-- body: <single most important item, ~90 chars. Prefer a human PR needing
-        review; else a commented/failing dependabot; else "K PRs safe to merge">
+- body: <single most important item, ~90 chars. Prefer a source-edit
+        auto-push (esp. a major — needs a semantics check before merge);
+        else a human PR needing review; else a commented/failing
+        dependabot; else "K PRs safe to merge">
 - sound: default
 ```
 
@@ -538,21 +662,32 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
 
 - Never run `/review` on a dependabot PR.
 - Safe-to-merge is **listed, never auto-merged**.
-- Auto-push is restricted to **mechanical** fixes (lockfile / dep-manifest
-  regeneration) that go green locally, and only to the dependabot PR's
-  own `head` branch — never to `master`/`main`/`dev`, never to a
-  human-authored branch.
+- Auto-push (never auto-merge) of a failing dependabot PR goes only to its
+  own `head` branch — never `master`/`main`/`dev`, never a human branch:
+  - **Metadata-only fix** (lockfile / dep-manifest / `client/CHANGELOG.md`)
+    → push when the failing check goes green locally.
+  - **Source-touching fix** (any other file, **including major bumps**) →
+    push only when the **entire** build+lint+test suite passes locally,
+    and only with a `[Claude]` comment carrying the diff + a "review-the
+    -semantics" banner. The fixer reads the bump's migration notes and
+    preserves runtime behavior — it does not just silence the compiler.
 - All build/repro work happens in a throwaway `/tmp` worktree so Gabor's
   working clone (which may hold WIP) is never disturbed.
-- A bot command (`rebase`/`recreate`) is **pending**, not "handled":
-  verify it landed on the next run (Step 6a-verify). A *successful* command
-  pushes a new head commit; an unchanged sha means it's still queued or the
-  bot refused. Escalation ladder: `rebase → recreate → [Claude] comment`.
+- **Dirty / behind branches are resolved locally when a clone exists**
+  (Step 6-resolve): rebase onto master in the worktree, reconcile the
+  mechanical conflicts (lockfile regen + `package.json` version union +
+  changelog), verify the full suite, and `--force-with-lease` push. This
+  is preferred over `@dependabot rebase` because of the refusal loop below.
 - **Why rebase gets refused:** dependabot won't rebase a branch whose top
   commit isn't its own. In this org the usual culprit is the
   `dependabot-changelog-helper` action, which adds a `github-actions[bot]`
-  "Updated Changelog" commit on top of the bump. The fix is `@dependabot
-  recreate`, which rebuilds the PR from scratch against current `master`.
+  "Updated Changelog" commit on top of the bump — and `recreate` just
+  re-triggers that action, so the bot can never durably land the PR.
+  Resolving locally sidesteps it entirely.
+- The `@dependabot rebase`/`recreate` ladder is now only the **no-clone**
+  fallback. When issued, a command is **pending**, not "handled": verify it
+  landed on the next run (Step 6a-verify). A *successful* command pushes a
+  new head commit; an unchanged sha means it's still queued or refused.
 
 ### PRE-AUTHORIZED actions
 
@@ -560,12 +695,20 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
   `gh api /repos/.../pulls/...`, `gh pr view`, `gh pr diff`,
   `gh pr checks`.
 - **For failing dependabot PRs requested by name only:** `git fetch`,
-  `git worktree add`/`remove`, package-manager `install`, build/lint/test,
-  `git commit`, and `git push origin HEAD:<dependabot head branch>` —
-  restricted to the three mechanical change classes only: lockfile /
-  `package.json` dep-manifest regeneration, and adding a missing
-  `client/CHANGELOG.md` entry (preserving the template block). Pushed
-  only when those changes make the failing checks pass locally.
+  `git worktree add`/`remove`, `git rebase origin/master` (to resolve a
+  dirty/behind branch in the worktree — Step 6-resolve), package-manager
+  `install`, build/lint/test, `git commit`, and `git push` to the
+  dependabot head branch — including `git push --force-with-lease
+  origin HEAD:<dependabot head branch>` after a local rebase rewrites
+  history. The fix may edit **any** file needed to make CI green
+  (source/config/tests included). Push gate by category: a
+  **metadata-only** fix (lockfile / `package.json` dep stanza /
+  `client/CHANGELOG.md`, preserving the template block) — and a local
+  conflict resolution, which is metadata by nature — is pushed when the
+  relevant checks/suite pass locally; a **source-touching** fix (incl.
+  major bumps) is pushed only when the full build+lint+test suite passes
+  locally, always with the 6e diff + review-semantics comment. Never a
+  merge.
 - **PR comments** via `gh pr comment` on dependabot-by-name PRs only:
   diagnosis/confirmation comments always prefixed with the `🤖 **[Claude]**`
   marker (Step 6e) so they're never mistaken for Gabor's own comments;
@@ -577,14 +720,15 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
 
 ### Explicitly NOT authorized
 
-- Merging any PR.
+- **Merging any PR** — push-to-fix is fine, the merge is always Gabor's.
 - Dismissing / editing the `hospitality` team review request, or removing
   any reviewer (the "removal" idea was dropped in favour of excluding).
 - Pushing to any non-dependabot branch, or to `master`/`main`/`dev`.
 - Posting review output of human-authored PRs to GitHub — that stays in
   the local log for Gabor only.
-- Editing any file on a dependabot branch other than the three allowed
-  mechanical classes (lockfiles, `package.json` dep stanza,
-  `client/CHANGELOG.md`). In particular, never touch `.ts`/`.js`/test/
-  config-logic files, and never remove the `client/CHANGELOG.md` template
-  block.
+- Pushing a **source-touching** fix without the full build+lint+test suite
+  green locally, or without the 6e diff + review-semantics comment. A
+  green typecheck alone is never enough — run the whole suite.
+- Removing or rewriting the `client/CHANGELOG.md` template block, ever.
+- Touching a **human-authored** PR's branch (source fixes are for
+  dependabot-by-name branches only).
