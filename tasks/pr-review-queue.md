@@ -5,7 +5,7 @@ title: Morning PR review queue — triage, dependabot, /review
 type: recurring
 schedule: "30 6 * * 1-5"
 next_run: 2026-06-01T06:30:00+02:00
-last_run: 2026-05-29T09:31:03+02:00
+last_run: 2026-05-29T13:54:46+02:00
 created: 2026-05-29T18:00:00+02:00
 status: active
 ---
@@ -39,7 +39,7 @@ Read `logs/pr-review-state.json` (JSON; create `{ "reviewed": {},
 ```json
 {
   "reviewed":   { "kasadev/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>" } },
-  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|safe", "at": "<iso>" } }
+  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|safe|rebase|recreate", "at": "<iso>" } }
 }
 ```
 
@@ -159,15 +159,26 @@ merge it (Gabor merges). Record `dependabot[...] = {sha, action:"safe"}`.
 No mutation.
 
 **5c. Failing →** attempt a mechanical fix, else comment. See Step 6.
+
 Skip entirely if `dependabot["kasadev/<repo>#<num>"].sha == head` AND its
-prior `action` was `commented`, `pushed`, or `rebase` — already handled
-at this exact SHA; just note "already handled (no new commits)".
+prior `action` was `commented`, `pushed`, or `safe` — already handled at
+this exact SHA; just note "already handled (no new commits)".
+
+A prior `action` of `rebase` or `recreate` at the **same** head sha is
+**not** "handled" — it means we issued a `@dependabot` command and are
+waiting for it to land. A command the bot *refuses* (e.g. "can't rebase")
+leaves the head sha unchanged forever, so blindly skipping would strand
+the PR as permanently dirty. Route these to **Step 6a-verify** first.
 
 ### Step 6 — Failing dependabot: rebase, mechanical fix, or comment
 
 Only ever do this for **dependabot** PRs requested **by name**. Never
 touch a human-authored PR's branch. Pick the **first** path that applies:
 
+- **6a-verify — A bot command is already outstanding →** if state shows
+  `action:"rebase"`/`"recreate"` at this same sha, check whether it landed
+  or was refused, and escalate (`rebase → recreate → comment`). Do this
+  before anything else so a refused command can't strand the PR.
 - **6a — Stale / conflicted branch →** ask dependabot to rebase (a bare
   bot command comment). Cheapest; no checkout.
 - **6b/6c — Mechanical CI failure →** regenerate the lockfile in an
@@ -192,6 +203,55 @@ comment instead (6d). The only files this task may write on a dependabot
 branch are lockfiles, the `package.json` dependency stanza, and
 `client/CHANGELOG.md`.
 
+**6a-verify. Did a previously-issued bot command land?**
+
+Reach here when state shows `action:"rebase"` or `action:"recreate"` for
+this PR at the **same** head sha (no new commit since we issued the
+command). A successful rebase/recreate **always** produces a new head
+commit — so an unchanged sha means the command either hasn't run yet or
+the bot refused it. Read dependabot's **latest** reply to decide:
+
+```bash
+gh pr view <num> --repo kasadev/<repo> --json comments \
+  --jq '[.comments[] | select(.author.login=="dependabot")] | last | .body'
+```
+
+Decide by the **content** of that latest dependabot reply (do **not** gate
+on the state `at` timestamp — `at` is the run-*end* time, while dependabot
+replies within seconds of the command, so the refusal usually predates
+`at`). Because a successful command would have moved the head sha (and we
+wouldn't be here), an unchanged sha + a refusal reply means it's stuck:
+
+- **Latest reply is not a refusal** (an acknowledgement, or no dependabot
+  comment at all) → the command is still queued. Note "rebase/recreate
+  pending — awaiting dependabot", keep the existing state entry, take no
+  further action this run.
+- **Bot refused the rebase** — reply contains "can't rebase" or "edited by
+  someone other than Dependabot". This happens when a `github-actions[bot]`
+  commit sits on top of dependabot's commit (the most common cause in this
+  org is the changelog-helper's "Updated Changelog" commit), so the branch
+  is no longer pure-dependabot and rebase is blocked. If we have **not**
+  already tried recreate (`action != "recreate"`), post the bare command:
+
+  ```bash
+  gh pr comment <num> --repo kasadev/<repo> --body '@dependabot recreate'
+  ```
+
+  `recreate` rebuilds the PR from scratch against current `master`,
+  overwriting the bot-blocking commits and resolving the conflicts. Post it
+  **bare, no `[Claude]` marker** (machine command — same exception as 6a).
+  Add the PR to "♻️ Rebase refused → asked dependabot to recreate" and
+  record `dependabot[...] = {sha, action:"recreate"}`. Stop here for this
+  PR.
+- **Bot refused the recreate too**, OR `action` was already `recreate` and
+  the sha still hasn't moved, OR any other terminal bot failure → the bot
+  can't self-resolve this branch. Fall through to **6d** and post one
+  `[Claude]` diagnosis comment: branch is stale + conflicted, dependabot
+  can't rebase or recreate it, needs a manual rebase or a close-and-let
+  -dependabot-reopen. Record `action:"commented"` so it surfaces under
+  "💬 Commented — needs you" and isn't retried at this sha. (Respect the
+  6d idempotency rule — don't double-post at the same sha.)
+
 **6a. Stale or conflicted branch → ask dependabot to rebase:**
 
 If `mergeable_state` is `dirty` (conflicts) or `behind` (trails base), or
@@ -209,8 +269,9 @@ This is the one exception to the marker rule; it's a machine command, not
 a human-facing note. Add the PR to "🔄 Asked dependabot to rebase" and
 record `dependabot[...] = {sha, action:"rebase"}`. Idempotency: don't
 re-issue `@dependabot rebase` for the same `head` sha twice — if state
-already shows `action:"rebase"` at this sha, just note "rebase already
-requested".
+already shows `action:"rebase"` at this sha, do **not** silently skip;
+go to **Step 6a-verify** to check whether the rebase landed or the bot
+refused it (and escalate to `recreate` / a comment accordingly).
 
 **6b. Prepare an isolated worktree (never disturb Gabor's clone):**
 
@@ -361,6 +422,8 @@ heading with `_None._` if empty, for a stable shape):
 ## 🤖 Dependabot (by name)
 ### 🔄 Asked dependabot to rebase (stale/conflicted branch)
 - <repo>#<num> <title> — <dirty|behind>. <url>
+### ♻️ Rebase refused → asked dependabot to recreate
+- <repo>#<num> <title> — bot couldn't rebase (branch edited by github-actions). <url>
 ### 🔧 Fixed automatically (lockfile/dep sync pushed, CI re-running)
 - <repo>#<num> <title> — pushed: <one line>. <url>
 ### 💬 Commented — needs you
@@ -481,6 +544,15 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
   human-authored branch.
 - All build/repro work happens in a throwaway `/tmp` worktree so Gabor's
   working clone (which may hold WIP) is never disturbed.
+- A bot command (`rebase`/`recreate`) is **pending**, not "handled":
+  verify it landed on the next run (Step 6a-verify). A *successful* command
+  pushes a new head commit; an unchanged sha means it's still queued or the
+  bot refused. Escalation ladder: `rebase → recreate → [Claude] comment`.
+- **Why rebase gets refused:** dependabot won't rebase a branch whose top
+  commit isn't its own. In this org the usual culprit is the
+  `dependabot-changelog-helper` action, which adds a `github-actions[bot]`
+  "Updated Changelog" commit on top of the bump. The fix is `@dependabot
+  recreate`, which rebuilds the PR from scratch against current `master`.
 
 ### PRE-AUTHORIZED actions
 
