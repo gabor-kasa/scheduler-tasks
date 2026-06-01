@@ -4,8 +4,8 @@ icon: person.2
 title: Daily 1:1 prep briefs for direct reports
 type: recurring
 schedule: "0 7 * * 1-5"
-next_run: 2026-06-01T07:00:00+02:00
-last_run: 2026-05-29T08:01:09+02:00
+next_run: 2026-06-02T07:00:00+02:00
+last_run: 2026-06-01T07:04:35+02:00
 created: 2026-05-18T16:00:00+02:00
 status: active
 ---
@@ -47,6 +47,37 @@ then waits in a poll loop for AWS SSO creds to become valid (Gabor
 refreshes them sometime between 07:00 and 10:00). After 10:00 with no
 valid creds, the task gives up with a notification.
 
+### Credential handling — READ THIS FIRST
+
+The scheduler launches this run with **short-lived STS credentials frozen
+into the process environment** (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`). They expire ~2h after launch, and because env-var
+creds sit at the **top** of AWS's resolution chain they *shadow* the
+on-disk SSO profile cache that `aws-login` refreshes. A running process
+cannot inherit a later `aws-login`, so any `aws` call that uses the
+inherited env vars fails with `ExpiredToken` — and the Step 1 poll loop
+below would then wait until 10:00 forever, never seeing the refresh.
+(This is exactly what broke the 2026-06-01 run: fired 07:04, Gabor logged
+in 07:05, still fruitlessly polling at 08:50.)
+
+So strip those three env vars on **every** command that touches AWS — the
+Step 1 poll loop, the Step 3 DynamoDB reads, **and** the inner `claude -p`
+in Step 4 (it inherits the same frozen env and does its own `aws dynamodb`
+reads). Resolution then falls through to the `default` SSO profile, which
+the SDK auto-refreshes from the on-disk SSO token `aws sso login` keeps
+current. Prepend this exact **AWS-clean prefix** to each such command:
+
+```
+env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_PROFILE=default
+```
+
+The three `-u` flags drop the dead env creds; `AWS_PROFILE=default` makes
+the SSO profile explicit. Each Bash tool call is a fresh shell, so prepend
+this literal prefix **in the same invocation** as the command — don't rely
+on a shell variable set in an earlier call. (Verified: with these vars
+unset and the `default` profile, `aws sts get-caller-identity` succeeds via
+the `Kasa` SSO session.)
+
 ### Step 1 — wait for AWS creds (up to 10:00 local)
 
 Loop until either `aws sts get-caller-identity --region us-west-2`
@@ -55,9 +86,14 @@ comes first.
 
 The loop body, each iteration:
 
-1. Run `aws sts get-caller-identity --region us-west-2` with a 15s
-   timeout. If it succeeds, log `aws creds valid at <local time>` and
-   break out of the loop — continue to Step 2.
+1. Run the credential check **with the AWS-clean prefix** (see
+   **Credential handling** above — without it this check uses the frozen
+   env creds and can never succeed):
+   ```
+   env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_PROFILE=default aws sts get-caller-identity --region us-west-2
+   ```
+   with a 15s timeout. If it succeeds, log `aws creds valid at <local
+   time>` and break out of the loop — continue to Step 2.
 2. If it fails, check the current local time:
    - If local time is **≥ 10:00** → stop looping, write the
      failure-with-notification block below, and **stop** the whole task.
@@ -65,6 +101,15 @@ The loop body, each iteration:
      <local time>, sleeping 5m` and sleep 300 seconds. (Use the Bash
      tool's `timeout` parameter — set it to 360000ms — so the 5-minute
      `sleep 300` completes within budget.) Loop again.
+
+**Run one iteration per Bash tool call** — check, log a line, `sleep 300`,
+return — and let this outer loop drive the repetition. Do **not** collapse
+the whole wait into a single shell `until …; do … sleep 300; done`
+command: a single long-running call buffers every per-iteration log line
+until it finally exits, so the run looks frozen for hours (that is what
+happened on 2026-06-01 — it was polling fine but the log hadn't flushed),
+and one call spanning the full ~3h wait can exceed the Bash timeout
+ceiling in stricter environments.
 
 Don't fire any notification for in-progress polling — only fire the
 "creds expired" notification at the 10:00 give-up point. Specifically,
@@ -125,7 +170,8 @@ The inner-prompt guardrails need this to suppress sprint-planning-day
 admin bursts. Read DynamoDB:
 
 ```
-aws dynamodb get-item \
+env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_PROFILE=default \
+  aws dynamodb get-item \
   --table-name jira-dashboard-production-tableTable-bdxoxuzx \
   --key '{"PK":{"S":"TEAM#hsp#DAILY_REPORT#<TODAY>"},"SK":{"S":"STANDUP"}}' \
   --region us-west-2 \
@@ -152,9 +198,12 @@ For each `{displayNameHint, eventTime, eventTitle}` from step 2:
    - `{{SPRINT_START_DATE}}` = the value from step 3
 2. Write the resulting prompt to `/tmp/one-on-one-prep-<slug>.md` (slug
    = lowercase displayNameHint, spaces → dashes).
-3. Run, with cwd `../jira`, 5-minute timeout:
+3. Run, with cwd `../jira`, 5-minute timeout. Launch it **with the
+   AWS-clean prefix** — the inner Claude inherits this run's frozen env and
+   does its own `aws dynamodb` reads, so it needs the clean credential
+   environment too:
    ```
-   (cd ../jira && claude -p --output-format text < /tmp/one-on-one-prep-<slug>.md)
+   (cd ../jira && env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN AWS_PROFILE=default claude -p --output-format text < /tmp/one-on-one-prep-<slug>.md)
    ```
    Capture stdout.
 4. Delete the temp file.
