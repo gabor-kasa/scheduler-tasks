@@ -604,6 +604,25 @@ afterward; if either changed, note it loudly in the log.
 
 ### Step 7 — Write the log + persist state
 
+**🚨 Output contract — emit the report exactly ONCE, then stop.** This is the
+most important rule of this step. The run's stdout IS the log: produce the
+report below **one single time** as your final output, then end the run. Do
+**not** regenerate, re-print, or "draft then redo" the report. A repeated
+report is a known failure mode — it triples the log and makes the app fire
+the desktop banner multiple times.
+
+- Exactly **one** `# PR review queue — <date>` report in the whole run.
+- Exactly **one** `## Outcome` block, and **at most one** `## Notification`
+  block (Step 8). Once you've written either, never write it again.
+- The `## Notification` block (or the `## Outcome` block when there's no
+  notification) is the **last thing** in the output. **Nothing follows it** —
+  no execution narrative, no "cleaned worktree" notes, no `---` separators.
+  Put all execution/narrative commentary **before** the `# PR review queue`
+  heading, never after the report. (A stray trailing narrative line after the
+  Notification block is exactly what seeds the repeat loop — don't emit one.)
+- When the report ends, the run is done. Do not continue with further turns,
+  commentary, or a second pass.
+
 Write the run log in this structure (omit a section's items but keep the
 heading with `_None._` if empty, for a stable shape):
 
@@ -697,6 +716,10 @@ If `attention` or `failure`, append a `## Notification` block:
 ```
 
 Skip the notification on `ok` runs — silence is the success state.
+
+This `## Notification` block (or the `## Outcome` block on an `ok` run) is the
+**final output of the run.** Stop here — emit nothing after it, and never
+loop back to re-emit the report (Step 7 output contract).
 
 ## Inner review prompt template
 
