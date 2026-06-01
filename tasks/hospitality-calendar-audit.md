@@ -4,8 +4,8 @@ icon: calendar
 title: "Audit [Hospitality] team meetings against scheduling rules"
 type: recurring
 schedule: "0 8 * * 1"
-next_run: 2026-06-01T08:00:00+02:00
-last_run: 2026-05-25T08:16:11+02:00
+next_run: 2026-06-08T08:00:00+02:00
+last_run: 2026-06-01T09:15:38+02:00
 created: 2026-05-11T15:05:00+02:00
 status: active
 ---

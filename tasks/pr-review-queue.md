@@ -4,8 +4,8 @@ icon: arrow.triangle.pull
 title: Morning PR review queue — triage, dependabot, /review
 type: recurring
 schedule: "30 6 * * 1-5"
-next_run: 2026-06-01T06:30:00+02:00
-last_run: 2026-05-29T15:14:26+02:00
+next_run: 2026-06-02T06:30:00+02:00
+last_run: 2026-06-01T12:36:20+02:00
 created: 2026-05-29T18:00:00+02:00
 status: active
 ---
@@ -19,7 +19,20 @@ clones live as siblings of this scheduler tree under
 `/Users/balazsgabor/Documents/workspace/kasa/<repo>` (i.e. `../<repo>`
 from the project root).
 
-The task does three things, in priority order:
+**Reviewer opt-out repos.** Gabor no longer reviews these repos, but the
+`hospitality` team's GitHub code-review-assignment keeps rotating him onto
+their PRs *by name*. For any PR in one of these repos where `gabor-kasa` is
+a requested reviewer, the task **removes him as a reviewer** (himself only —
+never another reviewer, never the team) and does nothing else with the PR.
+The list (add a repo name to opt out of more):
+
+- `simulator-service`
+
+The task does these, in priority order:
+
+0. **Opt-out removal** — for a PR in a reviewer opt-out repo (above) where
+   Gabor is a requested reviewer, remove him as a reviewer (himself only)
+   and take no further action on that PR.
 
 1. **Triage** every PR where Gabor is a requested reviewer **by name**,
    splitting human-authored PRs (→ run `/review`) from dependabot PRs
@@ -41,7 +54,7 @@ Read `logs/pr-review-state.json` (JSON; create `{ "reviewed": {},
 ```json
 {
   "reviewed":   { "kasadev/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>" } },
-  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|rebase|recreate", "at": "<iso>" } }
+  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|rebase|recreate|skipped-env", "at": "<iso>" } }
 }
 ```
 
@@ -84,6 +97,24 @@ branch trails its base. When `../<repo>` exists, both are best fixed by
 **resolving the conflict locally** (Step 6-resolve) — a rebase onto master
 in a worktree + lockfile regen. Only fall back to asking dependabot to
 rebase (Step 6a) when there's no local clone.
+
+**Opt-out repos first.** Before bucketing, if the PR's repo is in the
+*reviewer opt-out* list (Instructions intro) AND `gabor-kasa` ∈ `reviewers`,
+this is one Gabor has opted out of reviewing. Remove him as a requested
+reviewer — himself only:
+
+```bash
+gh pr edit <num> --repo kasadev/<repo> --remove-reviewer gabor-kasa
+```
+
+Then drop the PR from all further handling (no triage, no draft logic, no
+`/review`, no dependabot fix). Record it for the "🚫 Auto-removed myself as
+reviewer" log section. Apply this **before** the draft check and the
+by_name/group split. No state entry is needed: once removed he's no longer
+an individual reviewer, so the PR won't return as **by_name**. (If the
+`hospitality` team is also requested it may still surface as **group_only**
+— listed-and-excluded, no action — and the rotation only re-adds him *by
+name* on a later PR, which is then removed again. That's expected.)
 
 Then bucket:
 
@@ -165,9 +196,27 @@ No mutation.
 **5c. Failing →** attempt a fix, else comment. See Step 6.
 
 Skip entirely if `dependabot["kasadev/<repo>#<num>"].sha == head` AND its
-prior `action` was `commented`, `pushed`, `pushed-source`, or `safe` —
-already handled at this exact SHA; just note "already handled (no new
-commits)".
+prior `action` was `commented`, `pushed`, `pushed-source`, or `safe`, **AND
+the PR's current CI is not red** (from the `gh pr checks` at the top of this
+step, no required check is `fail`) — already handled at this exact SHA; just
+note "already handled (no new commits)".
+
+**A red PR is never "handled."** If a required check is currently `fail` at
+the stored sha, do **not** skip on any stored action — re-evaluate the PR
+through Step 6 every run, no matter whether the prior action was
+`commented`, `pushed`, `pushed-source`, or `safe`. A stored `pushed`/
+`pushed-source` that left CI red means the earlier verification was
+incomplete (the classic case: a build-only gate that never ran lint — the
+`css-api#136` failure mode 6-resolve step 4 warns about, where a rebase onto
+master surfaced fresh `no-unnecessary-type-assertion` lint errors after a
+build-only push); a stored `commented` may have been a run-env npm-auth
+block that should have been `skipped-env`. Without this guard such a PR
+freezes forever — its head sha is the task's own commit, so no new sha ever
+arrives to retrigger evaluation. Re-evaluating is safe: the 6d
+comment-idempotency guard and the 6a-verify bot-command guard already
+prevent a duplicate comment / bot command at the same sha, so the worst case
+is a no-op, while the best case is the PR finally goes green (or is correctly
+routed to `skipped-env`, which is itself retried every run).
 
 A prior `action` of `rebase` or `recreate` at the **same** head sha is
 **not** "handled" — it means we issued a `@dependabot` command and are
@@ -193,6 +242,14 @@ touch a human-authored PR's branch. Pick the **first** path that applies:
   (a bare bot command). Fallback only when we can't resolve locally.
 - **6b/6c — CI failure on a mergeable branch with a determinable fix →**
   fix it in an isolated worktree, verify, and push (never merge).
+- **6-skip — The only blocker is the run env, not the PR →** if a fresh
+  install of the repo's private `@kasadev/*` packages genuinely fails to
+  **authenticate** (a 401/403/ENEEDAUTH from the registry serving `@kasadev`),
+  the suite is unverifiable. **Skip the PR — post nothing** (a comment that the
+  bot couldn't authenticate to npm helps no one else watching the PR). Log it
+  under "⏭️ Skipped — couldn't verify locally" and move on. This is a
+  *reactive* gate — reached only after an install actually fails on auth, never
+  pre-judged by grepping a config file (see 6c-i).
 - **6d — Non-mechanical conflict, no verifiable fix, or no local clone →**
   post a `[Claude]` diagnosis / hand-off comment.
 
@@ -372,9 +429,20 @@ git -C ../<repo> worktree add -f /tmp/pr-fix-<repo>-<num> pr-<num>-fix
 
 Working in `/tmp/pr-fix-<repo>-<num>`:
 
-**6c-i. Install + reproduce:** Detect the package manager by lockfile and
-run a fresh install (`npm install` / `yarn install` / `pnpm install`) —
-this regenerates the lockfile if it was out of sync. Then reproduce the
+**6c-i. Install + reproduce:** The install must be able to fetch the repo's
+private `@kasadev/*` dependencies. **Do NOT pre-judge auth by grepping a config
+file.** The `@kasadev` scope is published to the **default registry
+(`registry.npmjs.org`)** as a private scope unless a repo-local `.npmrc`
+overrides `@kasadev:registry` — it is **not** on GitHub Packages, so the
+absence of a `//npm.pkg.github.com/:_authToken=` line means nothing. Auth for
+`@kasadev` comes from the `//registry.npmjs.org/:_authToken=` token in
+`~/.npmrc` (Gabor is logged in to npmjs.org as `gabor-kasa`). Detect the
+package manager by lockfile and run a fresh install (`npm install` /
+`yarn install` / `pnpm install`) — this regenerates the lockfile if it was out
+of sync. **Only** if that install fails to *authenticate* — a
+401/403/ENEEDAUTH from the registry actually serving `@kasadev` (not a version
+or peer-dep resolution error) — is the suite unverifiable → go to **6-skip**
+(skip the PR, no comment). Otherwise proceed: reproduce the
 failing check locally — infer the command from the failing check names in
 Step 5 (e.g. `lint-app`, `tests`, `Client Build`, `typecheck`) and the
 repo's `package.json` scripts (common: `npm run build`, `npm run lint`,
@@ -469,13 +537,32 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 git -C /tmp/pr-fix-<repo>-<num> push origin HEAD:<headRef>
 ```
 
+**6-skip. Run-env limitation → skip, don't comment:**
+
+Reach here when the *only* reason the fix can't be verified is that the run
+environment can't **authenticate** to install the repo's private `@kasadev/*`
+packages — i.e. a fresh install actually returned 401/403/ENEEDAUTH from the
+registry serving `@kasadev` (normally `registry.npmjs.org`, where the scope is
+a private npm scope; it is **not** GitHub Packages, so do not look for a
+`//npm.pkg.github.com/:_authToken=` line, and do not skip on its absence). This
+is a limitation of the scheduled run's machine, **not** of the PR, so a
+`[Claude]` comment saying "I couldn't authenticate to npm" only adds noise for
+everyone else watching the PR. **Post nothing.**
+
+Add the PR to "⏭️ Skipped — couldn't verify locally" with the failing check
+and the bump, and record `dependabot[...] = {sha, action:"skipped-env"}`.
+Do **not** treat `skipped-env` as "handled" in Step 5's skip-if-unchanged
+gate — re-attempt it every run, so the moment the env is authed (Gabor logs
+into npm) the PR is fixed automatically without waiting for a new commit.
+
 **6d. Comment a diagnosis (no push):**
 
 When no fix can be verified green (the suite won't pass, the fix is
-ambiguous, or there's no local clone to reproduce in), post one `[Claude]`
-comment (6e) with: the failing check(s), the root-cause one-liner, and a
-concrete suggested patch. Add to "💬 Commented — needs you". Record
-`dependabot[...] = {sha, action:"commented"}`.
+ambiguous, or there's no local clone to reproduce in) — **except** when the
+only blocker is the run-env npm-auth limitation, which goes to **6-skip**
+(no comment) — post one `[Claude]` comment (6e) with: the failing check(s),
+the root-cause one-liner, and a concrete suggested patch. Add to "💬
+Commented — needs you". Record `dependabot[...] = {sha, action:"commented"}`.
 
 Idempotency: before posting in 6d (or 6c's confirmation comment), if
 `dependabot["kasadev/<repo>#<num>"].sha == head` and a prior `[Claude]`
@@ -550,6 +637,8 @@ heading with `_None._` if empty, for a stable shape):
 - <repo>#<num> <title> — <MAJOR?> pushed source fix: <one line>; full build+lint+test green locally. <url>
 ### 💬 Commented — needs you
 - <repo>#<num> <title> — <root-cause one-liner>. <url>
+### ⏭️ Skipped — couldn't verify locally (run-env limitation)
+- <repo>#<num> <title> — <failing check>; install of private @kasadev deps failed to authenticate (401/403/ENEEDAUTH from <registry>), no comment posted. <url>
 ### ✅ Safe to merge (green, single patch/minor)
 - <repo>#<num> <title> <url>
 ### 🟡 Green — review changelog (major or group bump)
@@ -559,6 +648,9 @@ heading with `_None._` if empty, for a stable shape):
 
 ## 👥 Group-assigned via hospitality (excluded — not yours by name)
 - <repo>#<num> <title> by <author> <url>
+
+## 🚫 Auto-removed myself as reviewer (opt-out repos)
+- <repo>#<num> <title> by <author> — removed gabor-kasa (opted out of this repo). <url>
 
 ## ✏️ Drafts (skipped)
 - <repo>#<num> <title> by <author> <url>
@@ -581,11 +673,14 @@ Severity:
 - `failure` — the `gh` search / auth failed and the queue couldn't be
   built. Put the error text in the log.
 - `attention` — any of: ≥1 human PR needs review, ≥1 dependabot fix was
-  pushed, ≥1 dependabot PR was commented (needs Gabor), or ≥1 safe-to
-  -merge PR is waiting. (The normal weekday state.)
+  pushed, ≥1 dependabot PR was commented (needs Gabor), ≥1 dependabot PR was
+  skipped for a run-env limitation (Gabor needs to log into npm or handle it
+  himself), or ≥1 safe-to-merge PR is waiting. (The normal weekday state.)
 - `ok` — nothing actionable: no human PRs needing review, no failing
   dependabot, nothing safe-to-merge waiting (only group-assigned /
-  already-reviewed / pending).
+  already-reviewed / pending / auto-removed-opt-out). Auto-removing Gabor
+  from an opt-out repo is routine cleanup — log it, but it never by itself
+  bumps severity or fires a notification.
 
 If `attention` or `failure`, append a `## Notification` block:
 
@@ -658,6 +753,20 @@ a team member). The task keeps only the ones where `gabor-kasa` is in
 `requested_reviewers` individually ("by name" / code owner). The rest
 are listed-and-excluded — Gabor only wants to act on by-name requests.
 
+### Reviewer opt-out repos
+
+Some repos (currently `simulator-service`) have a team-only CODEOWNERS
+(`* @kasadev/hospitality`), but the `hospitality` team's GitHub
+**code-review-assignment** rotates a subset of members onto each PR *by
+name* — so Gabor lands in `requested_reviewers` individually even though
+there's no per-repo or individual opt-out on GitHub's side. He's decided he
+doesn't review these repos. Rather than remove himself from each PR by hand
+(the rotation re-adds him on every *new* PR), the task does it for him:
+remove `gabor-kasa` (himself only) whenever he's a requested reviewer on a
+PR in an opt-out repo. This is the **one** place the task removes a reviewer
+— and only ever himself, never the team or anyone else. Removal is silent
+(logged, no notification); see Step 2's "Opt-out repos first".
+
 ### Dependabot rules
 
 - Never run `/review` on a dependabot PR.
@@ -673,6 +782,16 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
     preserves runtime behavior — it does not just silence the compiler.
 - All build/repro work happens in a throwaway `/tmp` worktree so Gabor's
   working clone (which may hold WIP) is never disturbed.
+- **Run env can't authenticate to install private deps → skip, never
+  comment** (Step 6-skip). The `@kasadev/*` scope is a **private npm scope on
+  `registry.npmjs.org`** (not GitHub Packages); auth is the
+  `//registry.npmjs.org/:_authToken=` token in `~/.npmrc`, and Gabor is logged
+  in as `gabor-kasa`. Reach 6-skip ONLY when a real install returns
+  401/403/ENEEDAUTH from that registry — never by grepping `~/.npmrc` for a
+  (nonexistent) GitHub Packages token. Skip the PR and surface it under "⏭️
+  Skipped — couldn't verify locally" — do **not** post a comment about the auth
+  gap; it's the bot's environment, not the PR, and the note helps no one else.
+  These skips are retried every run, so they self-heal the moment auth works.
 - **Dirty / behind branches are resolved locally when a clone exists**
   (Step 6-resolve): rebase onto master in the worktree, reconcile the
   mechanical conflicts (lockfile regen + `package.json` version union +
@@ -694,6 +813,11 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
 - **Read-only `gh`:** `gh api -X GET /search/issues`,
   `gh api /repos/.../pulls/...`, `gh pr view`, `gh pr diff`,
   `gh pr checks`.
+- **Removing Gabor as a requested reviewer** — `gh pr edit <num> --repo
+  kasadev/<repo> --remove-reviewer gabor-kasa` — but ONLY on PRs in a
+  *reviewer opt-out repo* (Instructions intro) and ONLY for `gabor-kasa`
+  himself. Never remove another reviewer; never dismiss or drop the
+  `hospitality` team request.
 - **For failing dependabot PRs requested by name only:** `git fetch`,
   `git worktree add`/`remove`, `git rebase origin/master` (to resolve a
   dirty/behind branch in the worktree — Step 6-resolve), package-manager
@@ -722,7 +846,9 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
 
 - **Merging any PR** — push-to-fix is fine, the merge is always Gabor's.
 - Dismissing / editing the `hospitality` team review request, or removing
-  any reviewer (the "removal" idea was dropped in favour of excluding).
+  **any reviewer other than `gabor-kasa` himself**. Removing Gabor from a PR
+  is allowed ONLY in a *reviewer opt-out repo* (Instructions intro);
+  everywhere else, group-assigned PRs are listed-and-excluded, not removed.
 - Pushing to any non-dependabot branch, or to `master`/`main`/`dev`.
 - Posting review output of human-authored PRs to GitHub — that stays in
   the local log for Gabor only.
@@ -732,3 +858,6 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
 - Removing or rewriting the `client/CHANGELOG.md` template block, ever.
 - Touching a **human-authored** PR's branch (source fixes are for
   dependabot-by-name branches only).
+- Posting a comment whose substance is just that the run env couldn't
+  authenticate / install (npm not logged in for `@kasadev` packages) — skip
+  the PR and log it internally instead (Step 6-skip).

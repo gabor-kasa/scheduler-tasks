@@ -4,8 +4,8 @@ icon: lock.shield
 title: Morning Datadog error summary for lock-related services
 type: recurring
 schedule: "0 7 * * 1-5"
-next_run: 2026-06-01T07:00:00+02:00
-last_run: 2026-05-29T07:46:48+02:00
+next_run: 2026-06-02T07:00:00+02:00
+last_run: 2026-06-01T07:04:35+02:00
 created: 2026-05-11T17:00:00+02:00
 status: active
 ---
