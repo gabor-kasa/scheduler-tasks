@@ -5,7 +5,7 @@ title: Morning PR review queue — triage, dependabot, /review
 type: recurring
 schedule: "30 6 * * 1-5"
 next_run: 2026-06-02T06:30:00+02:00
-last_run: 2026-06-01T12:36:20+02:00
+last_run: 2026-06-01T14:09:22+02:00
 created: 2026-05-29T18:00:00+02:00
 status: active
 ---
@@ -27,6 +27,7 @@ never another reviewer, never the team) and does nothing else with the PR.
 The list (add a repo name to opt out of more):
 
 - `simulator-service`
+- `payment-requests-service`
 
 The task does these, in priority order:
 
