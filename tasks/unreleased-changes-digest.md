@@ -5,7 +5,7 @@ title: Unreleased changes digest
 type: recurring
 schedule: "30 7 * * 1"
 next_run: 2026-06-08T07:30:00+02:00
-last_run: null
+last_run: 2026-06-01T15:04:27+02:00
 created: 2026-06-01T12:00:00+02:00
 status: active
 ---
@@ -46,12 +46,31 @@ Notes:
 - For each candidate dir `<repo>`, **skip it unless `../<repo>/.git`
   exists** — directories like `css-api-ts6`, `salto-sync-ts6`,
   `smartthings-sync-ts6` are local migration working copies, not repos.
+- **Archived repos are also excluded**, but archive status is a GitHub
+  property not visible in the local clone, so that skip happens in Step 2
+  once `gh repo view` runs (see Step 2.1). Known archived repos as of
+  2026-06-01: `css-api-client`, `seam-sync-api-client`, `risk-score-service`
+  — don't hardcode this list, it's just the current snapshot; the `gh`
+  `isArchived` check is the source of truth.
 
 ### Step 2 — Per repo: compute unreleased commits + a compare link
 
 For each discovered repo:
 
-1. Default branch: `gh repo view kasadev/<repo> --json defaultBranchRef -q '.defaultBranchRef.name'` (most are `master`; handle `main` too).
+1. Default branch + archive status (one call):
+
+   ```bash
+   gh repo view kasadev/<repo> --json isArchived,defaultBranchRef \
+     -q '{archived: .isArchived, branch: .defaultBranchRef.name}'
+   ```
+
+   If `archived == true` → **skip the repo entirely**: no compare, no
+   staleness/anomaly classification, no digest section. Record it in the
+   Execution narrative under "Skipped (archived)" (same as the non-`.git`
+   skips in Step 1). An archived repo is frozen and will never cut another
+   release, so unreleased commits sitting on it are expected, not a hygiene
+   problem — listing them only generates false STALE noise. Otherwise use
+   `.branch` as the default branch (most are `master`; handle `main` too).
 2. Latest published release tag: `gh release view --repo kasadev/<repo> --json tagName -q '.tagName'`. If empty → the repo has **no releases**; record it under "No releases/tags" and move on (don't guess a baseline).
 3. Compare the release tag to the default branch:
 
