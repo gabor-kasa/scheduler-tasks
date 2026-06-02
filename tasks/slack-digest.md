@@ -4,8 +4,8 @@ icon: text.bubble
 title: Weekday Slack digest — what I missed
 type: recurring
 schedule: "0 6 * * 1-5"
-next_run: 2026-06-02T06:00:00+02:00
-last_run: 2026-06-01T07:04:35+02:00
+next_run: 2026-06-03T06:00:00+02:00
+last_run: 2026-06-02T07:10:53+02:00
 created: 2026-05-18T09:30:00+02:00
 status: active
 ---
