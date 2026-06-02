@@ -36,17 +36,31 @@ exist. Leave commits to the user's normal git flow; the global
 ## Task file format
 
 YAML frontmatter + markdown body. Required frontmatter keys: `id`, `title`,
-`type` (`oneoff|recurring`), `schedule`, `next_run`, `last_run`, `created`,
-`status`. The body has `## Instructions` (what the spawned Claude does when
-the task fires) and usually `## Context`.
+`type` (`oneoff|recurring`), `schedule`, `created`, `status`. `next_run` is an
+optional first-fire **seed**; `last_run` is optional. The body has
+`## Instructions` (what the spawned Claude does when the task fires) and usually
+`## Context`.
 
 - Times are ISO 8601 with a local offset (`2026-05-12T08:00:00+02:00`),
   **not** UTC. Cron expressions in `schedule` are interpreted in local time.
 - `schedule` accepts a 5-field cron expression or `every Nh|m|d|w`.
 - Start from `TASK_TEMPLATE.md`; `EXAMPLE_TASK.md` has worked samples.
 
-The app advances `last_run` / `next_run` / `status` itself after each run —
-you don't hand-edit those except to reschedule.
+The live `next_run` / `last_run` live in the gitignored
+`logs/schedule-state.json` sidecar, **not** the task `.md` — that's what keeps
+these version-controlled task files from churning on every run. The app
+advances them there after each run; only `status` is written back into the
+`.md` (and a same-value rewrite is content-identical, so it won't churn git).
+The `.md` `next_run` is just the first-fire seed (read once, then the sidecar
+owns it). To re-time a task's next fire, edit its entry in
+`logs/schedule-state.json` (or delete the entry to fall back to the `.md`
+seed) — editing the frontmatter `next_run` alone won't take effect once the
+task has run. `status` you can still hand-edit (e.g. `paused`).
+
+> Takes effect once the new app build ships (the running build may still write
+> `next_run`/`last_run` into the `.md` until then). After it ships and each task
+> has run once, the now-inert `next_run`/`last_run` lines can be stripped from
+> the existing `tasks/*.md` in a one-time commit.
 
 ## What a run must produce (the contract)
 
