@@ -4,8 +4,6 @@ icon: shippingbox
 title: Unreleased changes digest
 type: recurring
 schedule: "30 7 * * 1"
-next_run: 2026-06-08T07:30:00+02:00
-last_run: 2026-06-01T15:04:27+02:00
 created: 2026-06-01T12:00:00+02:00
 status: active
 ---

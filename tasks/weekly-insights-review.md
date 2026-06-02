@@ -4,8 +4,6 @@ icon: chart.bar
 title: Weekly Claude Code usage review + personalised tips
 type: recurring
 schedule: "0 9 * * 1"
-next_run: 2026-06-08T09:00:00+02:00
-last_run: 2026-06-01T09:01:51+02:00
 created: 2026-05-13T12:00:00+02:00
 status: active
 ---

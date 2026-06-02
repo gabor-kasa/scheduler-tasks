@@ -4,8 +4,6 @@ icon: arrow.triangle.pull
 title: Morning PR review queue — triage, dependabot, /review
 type: recurring
 schedule: "30 6 * * 1-5"
-next_run: 2026-06-03T06:30:00+02:00
-last_run: 2026-06-02T09:47:10+02:00
 created: 2026-05-29T18:00:00+02:00
 status: active
 ---
