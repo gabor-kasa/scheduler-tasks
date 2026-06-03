@@ -47,6 +47,35 @@ if [ "$weekday" = "1" ]; then days_back=3; else days_back=1; fi
 cutoff_date=$(date -v-${days_back}d +%Y-%m-%d)
 cutoff_ts=$(date -j -f "%Y-%m-%d %H:%M:%S" "$cutoff_date 18:00:00" +%s).000000
 cutoff_human="$cutoff_date 18:00 $(date +%Z)"
+
+# Separate window for the #tech-releases "Shipped" section (Step 5):
+# "since the last run", NOT the 18:00 cutoff above. Releases ship during
+# business hours, so the 18:00 cutoff would miss most of the previous
+# workday's deploys.
+#
+# Source of truth for the last run is the gitignored schedule-state
+# sidecar. The app advances it *after* each run, so while this run is
+# executing the sidecar still holds the PREVIOUS run's timestamp — exactly
+# the "since the last run" anchor we want. If there's no recorded last run
+# (first run ever, or the entry is missing/unreadable), fall back to the
+# last 24 hours.
+state_file="logs/schedule-state.json"
+last_run=$(jq -r '."slack-digest".last_run // empty' "$state_file" 2>/dev/null)
+releases_cutoff_ts=""
+if [ -n "$last_run" ]; then
+  # ISO 8601 w/ local offset, e.g. 2026-06-03T06:35:44+02:00. BSD %z wants
+  # +0200 (no colon), so strip the colon from the trailing offset first.
+  lr_norm=$(printf '%s' "$last_run" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/')
+  lr_secs=$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$lr_norm" +%s 2>/dev/null)
+  if [ -n "$lr_secs" ]; then
+    releases_cutoff_ts="${lr_secs}.000000"
+    releases_cutoff_human="$last_run (last run)"
+  fi
+fi
+if [ -z "$releases_cutoff_ts" ]; then
+  releases_cutoff_ts=$(date -v-24H +%s).000000
+  releases_cutoff_human="$(date -v-24H '+%Y-%m-%d %H:%M %Z') (last 24h — no recorded last run)"
+fi
 ```
 
 You'll also need a date-only form for Slack search modifiers
@@ -159,7 +188,56 @@ new information). Short closure acks from the other side ("ok",
 "thanks", "rendben", "oks", "👍") mean the thread is **closed**, not
 "ball back in their court" — say so plainly.
 
-### Step 5 — Write the digest log
+### Step 5 — What shipped (#tech-releases — different, wider window)
+
+Read deploy announcements from **#tech-releases** (`C03HRBXNEMD`). This is
+a separate report from the per-channel digest above and uses a **different
+window**: the "since the last run" window from Step 1 (`releases_cutoff_ts`
+/ `releases_cutoff_human`), **not** the 18:00 `cutoff_ts`. #tech-releases
+is not a starred channel — don't add it to `## Channels`.
+
+```
+slack_read_channel(
+  channel_id="C03HRBXNEMD",
+  oldest=<releases_cutoff_ts>,
+  limit=100,
+  response_format="detailed"
+)
+```
+
+If a full page (100 messages) comes back and the oldest returned message
+is still ≥ `releases_cutoff_ts`, paginate with the returned cursor until
+messages fall before the cutoff (a Monday / post-weekend window can span
+several days and exceed one page).
+
+Posts come from the `incoming-webhook` bot in a fixed shape:
+
+```
+*[service name]* `vX.Y.Z` · deployed by <who>
+- <jira-link|RC-1234> <summary> (<author>)
+- *<summary>* (<author>)              # no ticket
+- Maintenance: <…>                    # housekeeping
+- Maintenance: bumped <…> (dependabot[bot] / npm-autorelease-pr-creator[bot])
+<release-url|View release> | <actions-run-url|run-id>
+```
+
+For each release capture: service, version, deployer, and the meaningful
+change bullets (the ticketed and bold ones). **Condense the noise** —
+collapse `Maintenance:` lines and `dependabot[bot]` /
+`npm-autorelease-pr-creator[bot]` dependency bumps into a single trailing
+`+ maintenance/deps` note rather than listing each bump. If a release is
+*entirely* maintenance/deps, render it as a single line.
+
+Build the Slack permalink with the same rule as Step 2 (drop the dot in
+`Message TS`): `https://livekasa.slack.com/archives/C03HRBXNEMD/p<ts>`.
+The `View release` link in the post is the GitHub release; keep it too
+when it adds value.
+
+This section is **informational only** — it never raises `Severity` on
+its own (see Step 7). Drop bot/release posts that aren't actual deploy
+announcements.
+
+### Step 6 — Write the digest log
 
 The scheduler creates the log file for this run. Append the body in
 this exact structure:
@@ -168,6 +246,8 @@ this exact structure:
 ## Window
 
 From <cutoff_human> to <now local>.
+The **Shipped** section below uses a different, wider window —
+<releases_cutoff_human> to <now local> (everything since the last run).
 
 > Caveat: this is an approximation. The Slack MCP available to this task
 > doesn't expose true unread state, so we use a time cutoff instead.
@@ -192,6 +272,15 @@ From <cutoff_human> to <now local>.
  explicitly in its subsection header so Gabor knows the window
  differs.>
 
+## Shipped
+<what landed since the last run, from #tech-releases (Step 5) — a WIDER
+ window than the sections above (see the Window note). Group by service;
+ one entry per service listing the version(s) shipped, deployer, and a
+ compressed summary of the meaningful changes. Collapse maintenance /
+ dependabot bumps to "+ maintenance/deps". Link each release's Slack post
+ (drop the dot in its ts), and keep the GitHub `View release` link when
+ useful. Newest service activity first.>
+
 ## Outcome
 Status: success
 Severity: <ok | attention | failure>
@@ -209,7 +298,10 @@ than omitting the heading — keeps the output shape consistent.
 - `failure` — Slack API calls erred out and you couldn't reconstruct
   the digest. Include the error text in the log body.
 
-### Step 6 — Notification
+The **Shipped** section (#tech-releases) is informational — a normal
+deploy feed never raises severity on its own.
+
+### Step 7 — Notification
 
 If `Severity: attention`, append:
 
