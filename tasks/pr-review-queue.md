@@ -26,6 +26,7 @@ The list (add a repo name to opt out of more):
 
 - `simulator-service`
 - `payment-requests-service`
+- `sns-events`
 - `url-shortener-api-client`
 
 The task does these, in priority order:
