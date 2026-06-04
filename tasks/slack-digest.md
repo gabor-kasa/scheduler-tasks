@@ -53,28 +53,32 @@ cutoff_human="$cutoff_date 18:00 $(date +%Z)"
 # business hours, so the 18:00 cutoff would miss most of the previous
 # workday's deploys.
 #
-# Source of truth for the last run is the gitignored schedule-state
-# sidecar. The app advances it *after* each run, so while this run is
-# executing the sidecar still holds the PREVIOUS run's timestamp — exactly
-# the "since the last run" anchor we want. If there's no recorded last run
-# (first run ever, or the entry is missing/unreadable), fall back to the
-# last 24 hours.
-state_file="logs/schedule-state.json"
-last_run=$(jq -r '."slack-digest".last_run // empty' "$state_file" 2>/dev/null)
+# Anchor on the PREVIOUS run's log filename. Do NOT read last_run from
+# the logs/schedule-state.json sidecar: the app stamps this run's OWN
+# start time there at launch (observed 2026-06-04), so mid-run the
+# sidecar points at this run and the window would collapse to minutes.
+# Run logs embed their start time in the filename
+# (slack-digest-2026-06-03T06-35-44+02-00.md) and this run's own log
+# already exists while this prompt executes — so the previous run is
+# the newest log more than an hour old. If none qualifies (first run
+# ever), fall back to the last 24 hours.
 releases_cutoff_ts=""
-if [ -n "$last_run" ]; then
-  # ISO 8601 w/ local offset, e.g. 2026-06-03T06:35:44+02:00. BSD %z wants
-  # +0200 (no colon), so strip the colon from the trailing offset first.
-  lr_norm=$(printf '%s' "$last_run" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/')
-  lr_secs=$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$lr_norm" +%s 2>/dev/null)
-  if [ -n "$lr_secs" ]; then
-    releases_cutoff_ts="${lr_secs}.000000"
-    releases_cutoff_human="$last_run (last run)"
+now_secs=$(date +%s)
+for f in $(ls -1r logs/slack-digest-*.md 2>/dev/null); do
+  stem=${f##*/slack-digest-}; stem=${stem%.md}
+  # 2026-06-03T06-35-44+02-00 → 2026-06-03T06:35:44+0200 for BSD date
+  iso=$(printf '%s' "$stem" | sed -E 's/T([0-9]{2})-([0-9]{2})-([0-9]{2})/T\1:\2:\3/; s/([+-][0-9]{2})-([0-9]{2})$/\1\2/')
+  secs=$(date -j -f "%Y-%m-%dT%H:%M:%S%z" "$iso" +%s 2>/dev/null)
+  [ -n "$secs" ] || continue
+  if [ "$secs" -lt $((now_secs - 3600)) ]; then
+    releases_cutoff_ts="${secs}.000000"
+    releases_cutoff_human="$iso (previous run)"
+    break
   fi
-fi
+done
 if [ -z "$releases_cutoff_ts" ]; then
   releases_cutoff_ts=$(date -v-24H +%s).000000
-  releases_cutoff_human="$(date -v-24H '+%Y-%m-%d %H:%M %Z') (last 24h — no recorded last run)"
+  releases_cutoff_human="$(date -v-24H '+%Y-%m-%d %H:%M %Z') (last 24h — no previous run log)"
 fi
 ```
 
@@ -309,7 +313,7 @@ If `Severity: attention`, append:
 ## Notification
 
 - title: Slack digest — what you missed
-- subtitle: <N mentions · M DMs · K channels>
+- subtitle: <N mentions · M DMs · K channels · R releases>
 - body: <one-line teaser of the single most urgent item, ~90 chars.
         Prefer a Critical bug if present; otherwise a DM with the
         ball on Gabor; otherwise the loudest channel item.>
