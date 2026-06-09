@@ -28,6 +28,7 @@ The list (add a repo name to opt out of more):
 - `payment-requests-service`
 - `sns-events`
 - `url-shortener-api-client`
+- `stripe-sync`
 
 The task does these, in priority order:
 
