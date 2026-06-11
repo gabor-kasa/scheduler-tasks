@@ -31,16 +31,31 @@ gracefully and record what you skipped.
   adversarially verify bug findings before reporting them. Prefer ~10 strong,
   verified findings over 40 maybes. Keep total subagent count reasonable
   (≤ ~15); 17 of these runs share one weekly token budget.
+- **Write the report incrementally.** Create the report file after Step 0
+  and append/update each section as its step completes — do not save the
+  whole write-up for the end. A run that dies mid-audit must still leave a
+  partial report (the synthesis treats a missing report as a failed audit).
+- **Timebox.** Runs fire ~2 hours apart and contend for the same token
+  budget. If you are ~90 minutes in, stop opening new threads: write up
+  what you have, list what was cut under "Skipped / caveats", and finish.
+- Redaction applies to PII too: any Datadog log line quoted in the report
+  or run log must have guest contact info, door codes, and tokens redacted
+  — reports are tracked files.
 
 ## Step 0 — Preflight
 
 1. `git -C REPO_DIR fetch origin` (tolerate network/auth failure — note it
    and continue with the local state).
-2. If the checkout is on the default branch and clean, audit it in place.
+2. If a stale worktree from a previous attempt exists (the
+   `/tmp/fable-audit-<repo>` path, or a dangling entry in
+   `git -C REPO_DIR worktree list`), clean it up first:
+   `git worktree remove --force` then `git worktree prune` — otherwise the
+   `git worktree add` below fails.
+3. If the checkout is on the default branch and clean, audit it in place.
    Otherwise create a temp worktree of `origin/<default-branch>` at
    `/tmp/fable-audit-<repo>` and audit that instead; remove it at the end.
    Never switch branches, pull, stash, or otherwise touch the user's checkout.
-3. Note in the report: branch audited, HEAD sha, commit date, and whether the
+4. Note in the report: branch audited, HEAD sha, commit date, and whether the
    local checkout was dirty/behind.
 
 ## Step 1 — Orient
@@ -78,7 +93,9 @@ re-check against the actual code confirms it):
    - **Secrets** — credentials/API keys/tokens committed in the tree or in
      config files; also scan git history (`git log -p` over likely files /
      `git grep` across recent revisions) for secrets that were "removed"
-     but still live in history. Never reproduce a found secret in the
+     but still live in history. Bound the history scan to the last ~2
+     years — old repos have deep histories and this pass must not eat the
+     subagent's whole budget. Never reproduce a found secret in the
      report or run log — name the file:line/commit, redact the value, and
      mark it **flag for rotation**.
    - **AuthN/AuthZ gaps** — endpoints missing the IAM/bearer authorizer
@@ -122,36 +139,39 @@ Use the `shared-kasa-datadog-logs` and `shared-kasa-datadog-metrics` skills.
 If DD_SERVICE_QUERY wasn't given, discover the service name first; if the
 service genuinely has no Datadog presence, say so and move on.
 
-1. **Error archaeology (90 days)** — aggregate `@level:error` (and warns if
-   errors are sparse) by normalized error key (strip UUIDs/timestamps/IDs).
-   Identify the *chronic* errors: present for weeks+, high count, never
-   fixed. For the top ~5, trace each back to the code, identify root cause,
-   and propose both the patch and the structural fix.
+1. **Error archaeology** — window: 90 days or the log index's actual
+   retention, whichever is shorter (probe with a quick count query first;
+   retention is likely well under 90 days). State the window actually used
+   in the report. Aggregate `@level:error` (and warns if errors are sparse)
+   by normalized error key (strip UUIDs/timestamps/IDs). Identify the
+   *chronic* errors: present for weeks+, high count, never fixed. For the
+   top ~5, trace each back to the code, identify root cause, and propose
+   both the patch and the structural fix.
 2. **Log noise & cost** — top log emitters by volume over 14 days; flag
    spammy loops, per-item logging inside batch loops, duplicate
    logger calls for one event, and debug/info logs that dominate volume.
    Datadog ingestion is real money — call out the top reduction opportunity.
-3. **Resource right-sizing** — CPU/mem utilization vs reserved over 30 days
-   (ECS task size/count, or Lambda memory/duration). Recommend concrete
-   sizing changes with estimated monthly $ delta.
-4. **Monitor & alerting coverage** — list the Datadog monitors that
+3. **Monitor & alerting coverage** — list the Datadog monitors that
    actually target this service (monitors API is key-auth, works
    overnight). Map them against the failure modes found in this audit:
    error-rate, latency, DLQ depth, cron-didn't-run, deploy regressions.
    Every chronic error from 3.1 gets the question "which monitor should
    have caught this, and does it exist?" — gaps are findings with a
    concrete proposed monitor each.
-5. **Forgotten-automation check** — inventory every scheduled job the repo
+4. **Forgotten-automation check** — inventory every scheduled job the repo
    defines (cron/EventBridge/scheduled Lambdas/queue fillers). For each:
    what it does, does Datadog show it actually running on schedule, does
    it fail silently (errors but nothing alerts), and does it have a
    dry-run/kill switch if it mutates data. A job that mutates data with
    no dry-run default and no off switch is at least a medium finding
    regardless of its current behavior.
-6. **Dead API surface** — endpoints/handlers defined in code with zero
-   traffic in the 90-day window. List them with a "remove or document
-   why it stays" recommendation — dead endpoints are free maintenance
-   burden and attack surface.
+5. **Dead API surface** (conditional) — only if the service has an HTTP
+   surface *and* Datadog has route-level traffic data for it (most of the
+   audited repos are queue-driven workers — skip with one line in that
+   case). Endpoints/handlers defined in code with zero traffic in the
+   error-archaeology window get a "remove or document why it stays"
+   recommendation — dead endpoints are free maintenance burden and attack
+   surface.
 
 ## Step 4 — AWS-dependent checks (expect expired creds; degrade gracefully)
 
@@ -164,17 +184,21 @@ approach) and any CloudWatch/SQS checks that add signal. If not: **skip
 silently into the report** — add a "Skipped: AWS checks (expired
 credentials)" line, keep `Status: success`, and do not retry-loop.
 
-## Step 5 — Cost picture
+## Step 5 — Cost picture & right-sizing
 
-From the infra definitions plus Step 3 metrics, estimate the service's
+Pull CPU/mem utilization vs reserved over 30 days (ECS task size/count, or
+Lambda memory/duration) and recommend concrete sizing changes. Combine with
+the infra definitions and Step 3 log volume to estimate the service's
 monthly AWS + Datadog footprint (task sizes × count, Lambda invocations ×
 memory, log volume, retention settings). Rough numbers are fine — the goal
 is ranking savings opportunities, not an invoice. List the top 1–3 savings
 levers with estimated $/month each.
 
-## Step 6 — Write the report
+## Step 6 — Finalize the report
 
-Write `reports/fable-audit-<REPO_NAME>.md`:
+You have been building `reports/fable-audit-<REPO_NAME>.md` incrementally
+since Step 0 (ground rules). Now finish it: write the TL;DR last, rank the
+findings, and make sure it matches this shape:
 
 ```
 # Fable audit — <repo> (<date>)
@@ -193,11 +217,12 @@ The Step 1 map + Step 2.1 observations worth keeping, and the bus-factor
 table from Step 2.6.
 
 ## Production signals
-Chronic errors table, log-noise summary, utilization vs reserved, monitor
-coverage gaps, scheduled-job inventory, dead endpoints.
+Chronic errors table (with the log window actually used), log-noise
+summary, monitor coverage gaps, scheduled-job inventory, dead endpoints
+(if applicable).
 
 ## Cost
-Estimated footprint + savings levers.
+Utilization vs reserved, estimated footprint, savings levers.
 
 ## Skipped / caveats
 Anything not checked and why (expired creds, no Datadog presence, dirty
