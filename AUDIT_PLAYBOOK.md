@@ -103,6 +103,18 @@ re-check against the actual code confirms it):
    compromise (not just a weakness), say so prominently in the report and
    set `Severity: attention` regardless of other findings — Gabor routes
    incidents to TechOps.
+5. **Resilience posture** — for every outbound dependency (vendor APIs,
+   other Kasa services, Mongo, queues): is there a timeout, a bounded
+   retry with backoff, and a defined behavior when it's down anyway?
+   Also: SIGTERM/drain handling on ECS services, SQS redrive policies and
+   poison-message handling, and whether partial-batch failures poison the
+   whole batch. The *absence* of a defense is a finding even when no bug
+   is triggered today — say what incident shape it invites.
+6. **Bus-factor map** — no subagent needed, plain git stats
+   (`git shortlog -sn`, per-directory blame concentration over the last
+   ~2 years): which areas have effectively a single author, and who.
+   Report it as a short table; the synthesis rolls these up into
+   "areas with no living maintainer".
 
 ## Step 3 — Production signals (Datadog — works overnight, API-key auth)
 
@@ -122,6 +134,24 @@ service genuinely has no Datadog presence, say so and move on.
 3. **Resource right-sizing** — CPU/mem utilization vs reserved over 30 days
    (ECS task size/count, or Lambda memory/duration). Recommend concrete
    sizing changes with estimated monthly $ delta.
+4. **Monitor & alerting coverage** — list the Datadog monitors that
+   actually target this service (monitors API is key-auth, works
+   overnight). Map them against the failure modes found in this audit:
+   error-rate, latency, DLQ depth, cron-didn't-run, deploy regressions.
+   Every chronic error from 3.1 gets the question "which monitor should
+   have caught this, and does it exist?" — gaps are findings with a
+   concrete proposed monitor each.
+5. **Forgotten-automation check** — inventory every scheduled job the repo
+   defines (cron/EventBridge/scheduled Lambdas/queue fillers). For each:
+   what it does, does Datadog show it actually running on schedule, does
+   it fail silently (errors but nothing alerts), and does it have a
+   dry-run/kill switch if it mutates data. A job that mutates data with
+   no dry-run default and no off switch is at least a medium finding
+   regardless of its current behavior.
+6. **Dead API surface** — endpoints/handlers defined in code with zero
+   traffic in the 90-day window. List them with a "remove or document
+   why it stays" recommendation — dead endpoints are free maintenance
+   burden and attack surface.
 
 ## Step 4 — AWS-dependent checks (expect expired creds; degrade gracefully)
 
@@ -159,10 +189,12 @@ Sev: high / medium / low. Evidence: file:line or a Datadog query/link.
 Recommendation: patch AND root-cause fix where they differ.
 
 ## Architecture notes
-The Step 1 map + Step 2.1 observations worth keeping.
+The Step 1 map + Step 2.1 observations worth keeping, and the bus-factor
+table from Step 2.6.
 
 ## Production signals
-Chronic errors table, log-noise summary, utilization vs reserved.
+Chronic errors table, log-noise summary, utilization vs reserved, monitor
+coverage gaps, scheduled-job inventory, dead endpoints.
 
 ## Cost
 Estimated footprint + savings levers.
