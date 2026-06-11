@@ -4,8 +4,6 @@ icon: arrow.triangle.pull
 title: Morning PR review queue — triage, dependabot, /review
 type: recurring
 schedule: "30 6 * * 1-5"
-next_run: 2026-06-02T06:30:00+02:00
-last_run: 2026-06-01T12:36:20+02:00
 created: 2026-05-29T18:00:00+02:00
 status: active
 ---
@@ -27,6 +25,10 @@ never another reviewer, never the team) and does nothing else with the PR.
 The list (add a repo name to opt out of more):
 
 - `simulator-service`
+- `payment-requests-service`
+- `sns-events`
+- `url-shortener-api-client`
+- `stripe-sync`
 
 The task does these, in priority order:
 
@@ -54,7 +56,7 @@ Read `logs/pr-review-state.json` (JSON; create `{ "reviewed": {},
 ```json
 {
   "reviewed":   { "kasadev/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>" } },
-  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|rebase|recreate|skipped-env", "at": "<iso>" } }
+  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|analyzed|rebase|recreate|skipped-env", "at": "<iso>" } }
 }
 ```
 
@@ -185,26 +187,44 @@ Classify the bump from the title (`bump X from a.b.c to a.b.d`, or
 - **major** bump, or a **group** update (multiple packages) → never
   safe-to-merge; list under "green — eyeball the changelog".
 
+Also flag whether the bumped package is **internal** — its name is under the
+`@kasadev/*` scope (`Bump @kasadev/<pkg> from …`; for a group, any `@kasadev/*`
+row in the body). Internal bumps carry **no release notes in the PR body**: the
+scope is a private npm scope, so dependabot renders only "See full diff in
+compare view" and Gabor opens the PR blind. For every **green** internal
+`@kasadev/*` bump, run the **changelog digest + relevance investigation**
+(Step 5i) — that's what tells him what changed across the range and whether it's
+safe to merge. Public-package bumps already embed dependabot's release
+notes/changelog in the PR body, so they keep the existing bare listing.
+
 Then:
 
 **5a. Green + single patch/minor →** add to **✅ Safe to merge**. Do NOT
-merge it (Gabor merges). Record `dependabot[...] = {sha, action:"safe"}`.
+merge it (Gabor merges). Record `dependabot[...] = {sha, action:"safe"}`. If
+it's an internal `@kasadev/*` bump, run Step 5i and append its **one-line
+digest** to the log entry (log only — a single additive minor doesn't warrant a
+PR comment).
 
-**5b. Green + major/group →** add to **🟡 Green, review changelog**.
-No mutation.
+**5b. Green + major/group →** add to **🟡 Green, review changelog**. If it's an
+internal `@kasadev/*` bump (or a group containing one), run **Step 5i**: write
+its full digest + relevance verdict into this PR's log block, **and** post the
+analysis as a `[Claude]` comment on the PR (5i-6 owns posting + the per-verdict
+state record). That comment is the only mutation here — never a merge, never a
+reviewer change, never an auto-reclassify to safe. A non-`@kasadev` (public)
+major/group bump keeps the bare listing.
 
 **5c. Failing →** attempt a fix, else comment. See Step 6.
 
 Skip entirely if `dependabot["kasadev/<repo>#<num>"].sha == head` AND its
-prior `action` was `commented`, `pushed`, `pushed-source`, or `safe`, **AND
-the PR's current CI is not red** (from the `gh pr checks` at the top of this
+prior `action` was `commented`, `pushed`, `pushed-source`, `safe`, or
+`analyzed`, **AND the PR's current CI is not red** (from the `gh pr checks` at the top of this
 step, no required check is `fail`) — already handled at this exact SHA; just
 note "already handled (no new commits)".
 
 **A red PR is never "handled."** If a required check is currently `fail` at
 the stored sha, do **not** skip on any stored action — re-evaluate the PR
 through Step 6 every run, no matter whether the prior action was
-`commented`, `pushed`, `pushed-source`, or `safe`. A stored `pushed`/
+`commented`, `pushed`, `pushed-source`, `safe`, or `analyzed`. A stored `pushed`/
 `pushed-source` that left CI red means the earlier verification was
 incomplete (the classic case: a build-only gate that never ran lint — the
 `css-api#136` failure mode 6-resolve step 4 warns about, where a rebase onto
@@ -223,6 +243,229 @@ A prior `action` of `rebase` or `recreate` at the **same** head sha is
 waiting for it to land. A command the bot *refuses* (e.g. "can't rebase")
 leaves the head sha unchanged forever, so blindly skipping would strand
 the PR as permanently dirty. Route these to **Step 6a-verify** first.
+
+### Step 5i — Internal `@kasadev/*` bump: changelog digest + relevance
+
+Runs for every **dependabot, by-name, green** PR whose bump is an internal
+`@kasadev/*` package (the single bumped package, or each `@kasadev/*` row of a
+group). The whole point: an internal bump's PR body has **no release notes**
+(private scope → dependabot shows only "See full diff in compare view"), so this
+step reconstructs what changed across the version range and decides whether it's
+safe **for this repo specifically**. Everything is **read-only** except the one
+optional `[Claude]` analysis comment in 5i-6. It is advisory — it never merges,
+never moves a major into the auto-safe bucket.
+
+**5i-1. Resolve the source + version range.** From the title
+`Bump @kasadev/<pkg> from <old> to <new>` (for a group, read each `@kasadev/*`
+row in the body for its own `<old>`/`<new>`). Finding *where the changelog
+lives* is the genuinely tricky part — these packages get **renamed**,
+**relaunched under a `-vN` repo**, and **migrated into a service monorepo**,
+sometimes more than once, and **npm's `repository` field often points at a
+stale/archived earlier home.** So don't trust any single pointer. Gather
+candidate source repos, then accept the **first candidate that actually carries
+`<new>`**. A candidate that is **archived OR lacks `<new>`** is a home the
+package has *moved on from* — reject it and try the next.
+
+Candidate repos, in priority order:
+1. The repo from `npm view @kasadev/<pkg>@<new> repository.url repository.directory`
+   (Gabor is npm-authed via the `~/.npmrc` token that serves `@kasadev`). If it
+   also returns a `directory`, that candidate is a **monorepo workspace** rooted
+   at `<directory>/`. (Beware: this can be stale — `kontrol-api-client` still
+   points here at `kontrol-api-client-v2`, which stops at 12.11.0.)
+2. `kasadev/<pkg>` (GitHub auto-redirects plain renames).
+3. **Monorepo candidates — strip the suffix BOTH ways and try each:** `<pkg>`
+   minus `-api-client` (`seam-sync-api-client` ⇒ `seam-sync`) **and** `<pkg>`
+   minus `-client` (`kontrol-api-client` ⇒ `kontrol-api`). The right monorepo is
+   the one whose `client/package.json` `.name` is `@kasadev/<pkg>` — *not* a
+   same-prefixed but unrelated repo (`kasadev/kontrol` is the frontend UI, not
+   the client's home).
+
+Accept a candidate when:
+- **Standalone** — not archived (or archived but still the only place with the
+  tag) **and** it has a release/tag for `<new>`:
+
+  ```bash
+  gh api /repos/<owner>/<repo> --jq '.full_name + " archived=" + (.archived|tostring)'
+  gh api /repos/<owner>/<repo>/releases --jq '.[].tag_name'   # must include <new>
+  ```
+
+  → 5i-2 standalone path.
+- **Monorepo** — `client/package.json` `.name == "@kasadev/<pkg>"` and
+  `.version` ≥ `<new>`:
+
+  ```bash
+  gh api /repos/kasadev/<candidate>/contents/client/package.json \
+    -H 'Accept: application/vnd.github.raw' | rg '"name"|"version"'
+  ```
+
+  → 5i-2 monorepo path.
+
+If **no** candidate carries `<new>` → verdict `inconclusive — couldn't locate
+source`; link `https://www.npmjs.com/package/@kasadev/<pkg>` and move on.
+
+Worked shapes (all three from `code-setting-service#883`): `enums` →
+`kasadev/enums`, live, releases match → accept at candidate 2.
+`seam-sync-api-client` → archived standalone, then `kasadev/seam-sync` `client/`
+→ accept at candidate 3 (strip `-api-client`). `kontrol-api-client` → npm points
+to archived `kontrol-api-client-v2` (stops at 12.11.0 — reject), plain name is
+archived 0.x (reject), then `kasadev/kontrol-api` `client/` at 12.12.0 → accept
+at candidate 3 (strip `-client`).
+
+**5i-2. Gather the changelog across `(<old>, <new>]`.** Use the path 5i-1 picked.
+
+**Standalone repo path.** The repo publishes GitHub releases whose tag names
+match the npm versions (some older ones carry a leading `v` — strip it). Fetch
+tags + bodies and keep releases **strictly greater than `<old>` and ≤ `<new>`**
+by **semver** order (not string order — `74.10.0` > `74.9.0`):
+
+```bash
+gh api --paginate /repos/<owner>/<repo>/releases \
+  --jq '.[] | {tag:(.tag_name|ltrimstr("v")), body:.body}'
+```
+
+Bodies are Keep-a-Changelog style (`added:` / `changed:` / `fixed:`), call out
+**Breaking** explicitly, and reference tickets (HSP-/RC-). If no releases fall
+in range, fall back to `<repo>/CHANGELOG.md` raw
+(`gh api /repos/<owner>/<repo>/contents/CHANGELOG.md?ref=<new> -H 'Accept: application/vnd.github.raw'`,
+which avoids base64), else `compare/<old>...<new>` commit subjects.
+
+**Monorepo workspace path.** The package's versions are tracked in the
+workspace `<dir>/CHANGELOG.md` (usually `client/CHANGELOG.md`) — **not** the
+monorepo's GitHub releases/tags. Those tags are the *service's* versions and
+have nothing to do with the client's (seam-sync's `v18.0.0` is unrelated to the
+client's `0.6.x`); never use them for the client range. Fetch the changelog raw:
+
+```bash
+gh api /repos/kasadev/<service>/contents/client/CHANGELOG.md -H 'Accept: application/vnd.github.raw'
+```
+
+Read the `## [x.y.z] - <date>` sections whose version is in `(<old>, <new>]`
+(same Keep-a-Changelog `added:`/`changed:`/`fixed:`/**Breaking** shape). The
+published version can **lead** the dated sections (the changelog lags the npm
+publish) — if `<new>` has no dated section yet, also read `## [Unreleased-*]`
+and note the changelog is behind. Pre-migration history (versions at/below the
+"migrate to monorepo" entry — e.g. `seam-sync-api-client` ≤ 0.6.0) lives in the
+**archived standalone repo's** releases; only fetch it if the range straddles
+the migration.
+
+**Pin it precisely with git when the changelog lags (local clone).** Monorepo
+client changelogs often **lag the published version** — `seam-sync`'s
+`client/CHANGELOG.md` has dated sections only up to `0.6.1` while the package is
+already at `0.6.5`, so `(0.6.4, 0.6.5]` has no section and `[Unreleased-patch]`
+lumps everything since `0.6.1` together. When the changelog can't pin the exact
+range **and** the source is cloned (`../<service>`, or `../<pkg>` for a
+standalone), settle it from git. **Refresh the clone first** — it is frequently
+stale (kontrol-api's local clone showed an old client version until pulled):
+
+```bash
+git -C ../<service> fetch origin   # or `git -C ../<service> pull --ff-only` if on master & clean
+git -C ../<service> log --oneline -S '"version": "<new>"' -- client/package.json
+git -C ../<service> diff --name-only <old-commit>..<new-commit> -- 'client/**/*.ts' | rg -v '\.spec\.|\.test\.'
+```
+
+(Read-only inspection — don't `pull` over a dirty/feature-branch clone; `fetch`
++ comparing `origin/master` history is enough and never disturbs Gabor's tree.)
+
+Judge by what actually changed: if **no source `.ts`** moved (only
+`package.json` / lockfile / `CHANGELOG.md`), it's a **dependency-only bump** →
+no API change → safe for any consumer, regardless of the vague changelog. If
+source did change, read that diff to classify breaking vs additive — it's more
+authoritative than the changelog anyway. (Worked: `seam-sync-api-client`
+0.6.4 → 0.6.5 = PR #59's 28-package dep group + the release commit, zero client
+source touched → safe; `code-setting-service` only uses `SeamSyncClient`.)
+
+**Caveat — a package that migrated INTO the monorepo mid-range** won't have a
+commit for `<old>` in the monorepo's history (its `<old>` was set in the old
+repo before the move — e.g. kontrol-api-client's `12.10.0` predates its arrival
+in `kontrol-api` at `12.11.1`). When `<old>` has no commit here, **lean on the
+changelog's dated per-version sections** (kontrol-api's `client/CHANGELOG.md` is
+well-maintained, so git-pin isn't needed); treat the "moved into monorepo" entry
+as a no-op (no code/API change).
+
+If nothing is obtainable from any path → verdict **`inconclusive`** + the npm
+page link.
+
+**5i-3. Distil what changed — breaking first.** From the gathered notes:
+- **Breaking / behavioral** — anything under `changed:`, labeled **Breaking**,
+  or that removes/renames/retypes an exported symbol, field, event, or SNS
+  topic. (Across a major bump there's usually just one or two — e.g. sns-events
+  75.0.0 retyped `saltoInstalledInUnit`/`saltoReplacedInUnit` `locks` from
+  `string[]` to `SaltoLock[]`.)
+- **Additive** — `added:` / `fixed:` (new optional fields, new events, fixes).
+  These don't break existing consumers.
+
+**5i-4. Relevance — does THIS repo use the changed surface?** Find what the
+consuming repo actually imports from the package. Needs the `../<repo>` clone;
+if it isn't present, mark relevance **`couldn't verify usage — no local clone`**
+and report the digest only.
+
+```bash
+rg -n "@kasadev/<pkg>" ../<repo> -g '!node_modules'
+```
+
+Collect (a) the imported symbols (`import { A, B } from '@kasadev/<pkg>'`) and
+(b) any string event/topic names the repo publishes or subscribes to. Then for
+**each breaking change** decide whether it touches a symbol/type/field/event in
+that used set:
+- A breaking change **hits the used surface** → **relevant**: name the symbol
+  and what changed; this bump may break the repo.
+- Every breaking change **misses the used surface** (or there are none) → the
+  changes don't affect what this repo uses. (sns-events example: smartthings-sync
+  imports only `DeviceStateChangedMessageBody` + `publishDeviceStateChangedEvent`;
+  the 75.0.0 salto-locks break touches neither → not relevant.)
+
+**5i-5. Verdict** — exactly one:
+- **✅ `safe to merge`** — green CI **and** no breaking change touches the used
+  surface (all relevant changes additive). Still a major Gabor merges himself,
+  but the breaking-change risk is cleared.
+- **⚠️ `review before merge`** — a breaking change hits the used surface; name
+  the symbol + the code change it implies.
+- **❓ `inconclusive`** — couldn't fetch notes or couldn't verify usage; report
+  what you have + the compare link.
+
+**5i-6. Surface it.** **Always** write the digest + verdict into this PR's log
+block (Step 7 — under "🟡 …" for a major/group, or the one-line digest under
+"✅ Safe to merge" for a single minor). **For a major or group internal bump**,
+also post the analysis as a `[Claude]` comment on the PR so the context lives
+on the PR for whoever merges. Use the 6e marker and this body:
+
+```
+🤖 **[Claude]** — automated note from Gabor's scheduled PR-triage task (not posted by Gabor).
+
+**Dependabot bump analysis — `@kasadev/<pkg>` <old> → <new>**
+
+Internal `@kasadev` package, so the PR body has no release notes. Here's what
+changed across the range and whether it affects this repo.
+
+**Breaking / behavioral:**
+- <…>   (or "None — every change in this range is additive.")
+
+**Additive:**
+- <…>
+
+**This repo uses:** `<symbol>`, `<symbol>` (or "couldn't verify — no local clone")
+**Relevance:** <one line — which breaking change, if any, touches the used surface>
+
+**Verdict: <✅ safe to merge | ⚠️ review before merge | ❓ inconclusive>** — <one line>
+```
+
+Idempotency — and why an `inconclusive` verdict is **not** terminal: before
+posting, list the PR's comments and find any existing `[Claude]` "Dependabot
+bump analysis" comment.
+- If one exists and reached a **concrete** verdict (✅/⚠️) for **every** package
+  it covers → **skip**, don't duplicate.
+- If one exists but **any** covered package is still **❓ inconclusive** → that's
+  usually a source that wasn't resolved that run (npm wasn't authed, or an
+  archived repo wasn't followed to its monorepo — the `code-setting-service#883`
+  failure). Re-run the analysis; if it now reaches a concrete verdict, post a
+  **fresh corrected comment** that supersedes the inconclusive one.
+
+Post with `gh pr comment <num> --repo kasadev/<repo> --body-file <tmp>`. Record
+`dependabot[...] = {sha, action:"analyzed"}` **only on a concrete verdict**, so
+a resolved PR is treated as handled (unless CI is red — then re-evaluate per the
+red-PR rule). For an inconclusive verdict, **leave the action unrecorded** so
+Step 5's skip gate re-attempts it every run (same self-healing as `skipped-env`)
+— the moment the source resolves, the corrected analysis lands automatically.
 
 ### Step 6 — Failing dependabot: rebase, fix + verify + push, or comment
 
@@ -660,8 +903,19 @@ heading with `_None._` if empty, for a stable shape):
 - <repo>#<num> <title> — <failing check>; install of private @kasadev deps failed to authenticate (401/403/ENEEDAUTH from <registry>), no comment posted. <url>
 ### ✅ Safe to merge (green, single patch/minor)
 - <repo>#<num> <title> <url>
+  <for an internal @kasadev bump: one-line digest, e.g. "adds optional `yieldType`; additive only">
 ### 🟡 Green — review changelog (major or group bump)
+<for a NON-@kasadev major/group bump, the bare listing — dependabot's body has the notes:>
 - <repo>#<num> <title> <url>
+<for an internal @kasadev major/group bump, the full Step 5i block:>
+#### <repo>#<num> — <title>
+<url>
+**Bump:** `@kasadev/<pkg>` <old> → <new> (major | group) · CI green
+**Breaking / behavioral:** <bullets, or "None — all additive">
+**Additive:** <one line or bullets of the added:/fixed: highlights>
+**This repo uses:** <symbols/events, or "couldn't verify — no local clone">
+**Verdict:** <✅ safe to merge — no breaking change affects this repo | ⚠️ review before merge — `<symbol>` changed | ❓ inconclusive — <why> + compare link>
+<analysis comment posted to PR | log only>
 ### ⏳ CI still running
 - <repo>#<num> <title> <url>
 
@@ -694,7 +948,10 @@ Severity:
 - `attention` — any of: ≥1 human PR needs review, ≥1 dependabot fix was
   pushed, ≥1 dependabot PR was commented (needs Gabor), ≥1 dependabot PR was
   skipped for a run-env limitation (Gabor needs to log into npm or handle it
-  himself), or ≥1 safe-to-merge PR is waiting. (The normal weekday state.)
+  himself), ≥1 internal `@kasadev/*` bump came back **⚠️ review before merge**
+  (a breaking change touches what the repo uses), or ≥1 safe-to-merge PR is
+  waiting. (A major/group bump whose Step 5i verdict is **✅ safe to merge**
+  counts as a safe-to-merge PR waiting.) (The normal weekday state.)
 - `ok` — nothing actionable: no human PRs needing review, no failing
   dependabot, nothing safe-to-merge waiting (only group-assigned /
   already-reviewed / pending / auto-removed-opt-out). Auto-removing Gabor
@@ -710,6 +967,7 @@ If `attention` or `failure`, append a `## Notification` block:
 - subtitle: <N review · M dependabot · K safe-to-merge>
 - body: <single most important item, ~90 chars. Prefer a source-edit
         auto-push (esp. a major — needs a semantics check before merge);
+        else an internal @kasadev bump that came back ⚠️ review before merge;
         else a human PR needing review; else a commented/failing
         dependabot; else "K PRs safe to merge">
 - sound: default
@@ -790,9 +1048,61 @@ PR in an opt-out repo. This is the **one** place the task removes a reviewer
 — and only ever himself, never the team or anyone else. Removal is silent
 (logged, no notification); see Step 2's "Opt-out repos first".
 
+### Internal `@kasadev/*` bumps — the changelog digest (Step 5i)
+
+The pain this solves: a dependabot PR that bumps an internal `@kasadev/*`
+package shows **no release notes** — the scope is a private npm scope, so
+dependabot renders only "See full diff in compare view". Gabor opens these with
+zero context: he can't tell what changed across the range, which parts are
+breaking, or whether any of it touches what the repo actually uses. A
+`74.0.0 → 75.3.0` bump like `smartthings-sync#195` looks scary (major!) but in
+practice spans ~10 mostly-additive releases plus one breaking change that the
+repo doesn't even use.
+
+Step 5i reconstructs the missing context: it pulls the source repo's GitHub
+releases across `(<old>, <new>]` (tags match the npm versions), separates
+breaking from additive, greps the consuming repo for the symbols/events it
+imports, and decides **relevance for this repo specifically** — a breaking
+change only matters if the repo uses the surface it touches. The output is a
+digest + a one-line safe/review/inconclusive verdict, written into the log and
+(for major/group bumps) posted as a `[Claude]` comment on the PR. It's advisory:
+it never merges and never auto-promotes a major into safe-to-merge.
+
+Worked example (`smartthings-sync#195`, `@kasadev/sns-events` 74.0.0 → 75.3.0):
+the repo imports only `DeviceStateChangedMessageBody` and
+`publishDeviceStateChangedEvent`; the lone breaking change (75.0.0 retyped
+`saltoInstalledInUnit`/`saltoReplacedInUnit` `locks`) touches neither →
+**verdict: safe to merge** despite the major.
+
+**Resolving where the changelog lives is the fiddly part** (Step 5i-1). The
+`@kasadev/<pkg>` → `kasadev/<pkg>` guess breaks several ways, and an **archived
+repo is the tell that the package moved, not a dead end** — so the resolver
+gathers candidates and accepts the first that actually carries `<new>`:
+- **Clean** — `@kasadev/enums` → `kasadev/enums`, live, releases match. Done at
+  candidate 2.
+- **Monorepo client** — `@kasadev/seam-sync-api-client`'s standalone repo is
+  archived at ≤ 0.6.0; from 0.6.1 ("migrate to monorepo") it lives in the
+  `client/` workspace of `kasadev/seam-sync`, changelog at `client/CHANGELOG.md`.
+  The monorepo's GitHub releases (`v18.0.0`…) are the **service's** versions —
+  never use them for the client's `0.6.x` range. This is the failure that
+  produced the bogus "inconclusive — archived repo" on `code-setting-service#883`
+  (`seam-sync-api-client` 0.6.4 → 0.6.5) before this fix.
+- **Moved more than once + stale npm pointer** — `@kasadev/kontrol-api-client`:
+  the plain repo is archived at 0.x, npm `repository` still points at
+  `kontrol-api-client-v2` (also archived, stops at 12.11.0 — so it **lacks** the
+  12.12.0 target), and the live home is the `client/` workspace of
+  **`kasadev/kontrol-api`** (strip `-client`, **not** `-api-client` →
+  `kasadev/kontrol` is the unrelated frontend UI). Only the candidate that
+  actually carries 12.12.0 wins. Its `client/CHANGELOG.md` is well-maintained
+  (per-version dated sections), so no git-pin needed — the 12.10→12.12 range is
+  all additive.
+
 ### Dependabot rules
 
 - Never run `/review` on a dependabot PR.
+- Internal `@kasadev/*` bumps → run the **changelog digest + relevance
+  investigation** (Step 5i); public-package bumps already carry release notes in
+  the PR body.
 - Safe-to-merge is **listed, never auto-merged**.
 - Auto-push (never auto-merge) of a failing dependabot PR goes only to its
   own `head` branch — never `master`/`main`/`dev`, never a human branch:
@@ -835,7 +1145,19 @@ PR in an opt-out repo. This is the **one** place the task removes a reviewer
 
 - **Read-only `gh`:** `gh api -X GET /search/issues`,
   `gh api /repos/.../pulls/...`, `gh pr view`, `gh pr diff`,
-  `gh pr checks`.
+  `gh pr checks`, plus the Step 5i source-resolution + changelog lookups
+  `gh api /repos/.../releases`, `gh api /repos/.../compare/...`,
+  `gh api /repos/.../contents/CHANGELOG.md?ref=...`,
+  `gh api /repos/.../contents/client/package.json` — and `rg` plus read-only
+  `git log` / `git diff` / `git show` over the local sibling clones
+  (`../<repo>`, `../<service>`, `../<pkg>`) to read changed-package usage and
+  pin a version range, including `git fetch origin` to refresh a stale clone
+  (and `git pull --ff-only` **only** when it's on `master` and clean). Never a
+  checkout / branch switch / commit in this read-only path — leave Gabor's
+  working tree untouched.
+- **Read-only `npm view`** (Step 5i-1 source resolution): `npm view
+  @kasadev/<pkg>@<ver> repository.url repository.directory` to find a renamed /
+  monorepo source. Metadata read only — never `npm install`/`publish` here.
 - **Removing Gabor as a requested reviewer** — `gh pr edit <num> --repo
   kasadev/<repo> --remove-reviewer gabor-kasa` — but ONLY on PRs in a
   *reviewer opt-out repo* (Instructions intro) and ONLY for `gabor-kasa`
@@ -859,6 +1181,8 @@ PR in an opt-out repo. This is the **one** place the task removes a reviewer
 - **PR comments** via `gh pr comment` on dependabot-by-name PRs only:
   diagnosis/confirmation comments always prefixed with the `🤖 **[Claude]**`
   marker (Step 6e) so they're never mistaken for Gabor's own comments;
+  the **changelog digest + relevance analysis** comment on internal
+  `@kasadev/*` major/group bumps (Step 5i-6), same marker, idempotent per sha;
   plus the bare `@dependabot rebase` / `@dependabot recreate` bot command
   (Step 6a) which is posted **without** the marker so dependabot can parse
   it.

@@ -4,8 +4,6 @@ icon: person.2
 title: Daily 1:1 prep briefs for direct reports
 type: recurring
 schedule: "0 7 * * 1-5"
-next_run: 2026-06-02T07:00:00+02:00
-last_run: 2026-06-01T12:36:30+02:00
 created: 2026-05-18T16:00:00+02:00
 status: active
 ---
