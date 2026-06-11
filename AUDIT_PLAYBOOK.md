@@ -74,6 +74,35 @@ re-check against the actual code confirms it):
 3. **Runtime & dependency health** — Node/TS versions vs Kasa current,
    `npm audit` highlights (prod deps first), notably stale deps, Jest/ESM
    friction, CI gaps (no tests on PR, no typecheck, etc.).
+4. **Security** — hunt for:
+   - **Secrets** — credentials/API keys/tokens committed in the tree or in
+     config files; also scan git history (`git log -p` over likely files /
+     `git grep` across recent revisions) for secrets that were "removed"
+     but still live in history. Never reproduce a found secret in the
+     report or run log — name the file:line/commit, redact the value, and
+     mark it **flag for rotation**.
+   - **AuthN/AuthZ gaps** — endpoints missing the IAM/bearer authorizer
+     the rest of the service uses, internal routes exposed publicly,
+     missing tenant/ownership checks on id-based lookups (IDOR), webhook
+     handlers that skip signature verification.
+   - **Injection & input handling** — un-validated input reaching Mongo
+     queries (operator injection via objects), shell exec, template
+     strings into URLs/headers (SSRF), unsafe deserialization.
+   - **Infra posture** (from serverless.yml/CDK) — wildcard IAM actions or
+     resources, public S3 buckets, permissive CORS, secrets passed as
+     plain env vars instead of Parameter Store/Secrets Manager references,
+     missing encryption settings on queues/buckets.
+   - **PII in logs** — guest contact info, door codes, or tokens being
+     logged (they end up in Datadog); this is both a compliance and a
+     cost finding.
+
+   Severity-rank security findings on exploitability × blast radius, and
+   verify them like bug findings — a security finding that doesn't survive
+   a skeptical re-read of the code doesn't ship. This is an authorized
+   internal audit of Kasa-owned code; if you find evidence of *active*
+   compromise (not just a weakness), say so prominently in the report and
+   set `Severity: attention` regardless of other findings — Gabor routes
+   incidents to TechOps.
 
 ## Step 3 — Production signals (Datadog — works overnight, API-key auth)
 
