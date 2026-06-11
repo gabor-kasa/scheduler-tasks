@@ -35,8 +35,8 @@ gracefully and record what you skipped.
   and append/update each section as its step completes — do not save the
   whole write-up for the end. A run that dies mid-audit must still leave a
   partial report (the synthesis treats a missing report as a failed audit).
-- **Timebox.** Runs fire ~2 hours apart and contend for the same token
-  budget. If you are ~90 minutes in, stop opening new threads: write up
+- **Timebox.** Runs fire ~5 hours apart (2/night) and contend for the same
+  token budget. If you are ~90 minutes in, stop opening new threads: write up
   what you have, list what was cut under "Skipped / caveats", and finish.
 - Redaction applies to PII too: any Datadog log line quoted in the report
   or run log must have guest contact info, door codes, and tokens redacted

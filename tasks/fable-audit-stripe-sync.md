@@ -3,8 +3,8 @@ id: fable-audit-stripe-sync
 icon: magnifyingglass
 title: "Fable audit: stripe-sync"
 type: oneoff
-schedule: 2026-06-13T06:00:00+02:00
-next_run: 2026-06-13T06:00:00+02:00
+schedule: 2026-06-15T22:00:00+02:00
+next_run: 2026-06-15T22:00:00+02:00
 created: 2026-06-11T17:30:00+02:00
 status: active
 ---

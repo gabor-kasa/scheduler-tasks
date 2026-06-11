@@ -3,8 +3,8 @@ id: fable-audit-synthesis
 icon: chart.bar.doc.horizontal
 title: "Fable audit: cross-repo synthesis"
 type: oneoff
-schedule: 2026-06-15T08:00:00+02:00
-next_run: 2026-06-15T08:00:00+02:00
+schedule: 2026-06-19T08:00:00+02:00
+next_run: 2026-06-19T08:00:00+02:00
 created: 2026-06-11T17:30:00+02:00
 status: active
 ---
@@ -57,6 +57,6 @@ body = top finding + total estimated monthly savings in one line.
 ## Context
 
 Finale of the June 2026 Fable audit series (see `AUDIT_PLAYBOOK.md`). Gabor
-has Fable 5 until June 22 — this lands the morning of June 15, leaving a
-week to act on the findings interactively. The draft ticket batch is
+has Fable 5 until June 22 — this lands the morning of June 19, leaving a
+few days to act on the findings interactively. The draft ticket batch is
 deliberately report-only: he triages and files after cross-checking.

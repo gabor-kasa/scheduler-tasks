@@ -3,8 +3,8 @@ id: fable-audit-callbox-automation
 icon: magnifyingglass
 title: "Fable audit: callbox-automation"
 type: oneoff
-schedule: 2026-06-13T04:00:00+02:00
-next_run: 2026-06-13T04:00:00+02:00
+schedule: 2026-06-15T03:00:00+02:00
+next_run: 2026-06-15T03:00:00+02:00
 created: 2026-06-11T17:30:00+02:00
 status: active
 ---
