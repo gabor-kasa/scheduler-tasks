@@ -3,6 +3,8 @@ id: fable-audit-code-setting-service
 icon: magnifyingglass
 title: "Fable audit: code-setting-service (legacy / migration status)"
 type: oneoff
+model: claude-opus-4-8
+effort: high
 schedule: 2026-06-18T03:00:00+02:00
 next_run: 2026-06-18T03:00:00+02:00
 created: 2026-06-11T17:30:00+02:00

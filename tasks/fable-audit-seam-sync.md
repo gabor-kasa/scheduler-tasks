@@ -3,6 +3,8 @@ id: fable-audit-seam-sync
 icon: magnifyingglass
 title: "Fable audit: seam-sync"
 type: oneoff
+model: claude-opus-4-8
+effort: high
 schedule: 2026-06-14T03:00:00+02:00
 next_run: 2026-06-14T03:00:00+02:00
 created: 2026-06-11T17:30:00+02:00

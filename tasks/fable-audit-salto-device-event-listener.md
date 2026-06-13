@@ -3,6 +3,8 @@ id: fable-audit-salto-device-event-listener
 icon: magnifyingglass
 title: "Fable audit: salto-device-event-listener"
 type: oneoff
+model: claude-opus-4-8
+effort: high
 schedule: 2026-06-14T22:00:00+02:00
 next_run: 2026-06-14T22:00:00+02:00
 created: 2026-06-11T17:30:00+02:00

@@ -3,6 +3,8 @@ id: fable-audit-synthesis
 icon: chart.bar.doc.horizontal
 title: "Fable audit: cross-repo synthesis"
 type: oneoff
+model: claude-opus-4-8
+effort: high
 schedule: 2026-06-19T08:00:00+02:00
 next_run: 2026-06-19T08:00:00+02:00
 created: 2026-06-11T17:30:00+02:00
@@ -11,13 +13,13 @@ status: active
 
 ## Instructions
 
-All 17 `fable-audit-*` runs should be done by now. Synthesize their reports
+All 13 `fable-audit-*` runs should be done by now. Synthesize their reports
 into the one artifact that outlives the Fable window.
 
 ### Step 1 — Inventory
 
-List `reports/fable-audit-*.md` (excluding `SYNTHESIS`). 17 are expected
-(15 services + hsp-libraries + jira). If any are missing or contain no
+List `reports/fable-audit-*.md` (excluding `SYNTHESIS`). 13 are expected
+(11 services + hsp-libraries + jira). If any are missing or contain no
 findings section, list them in the output under "Missing/failed audits" —
 do not re-run them yourself.
 
@@ -28,7 +30,7 @@ Read every report in full. Produce
 
 1. **Portfolio top 10** — the highest-impact findings across all repos,
    re-ranked against each other (a medium in css-api may outrank a high in
-   simulator-service — weight by service criticality and guest impact).
+   callbox-automation — weight by service criticality and guest impact).
    Each entry: repo, finding, evidence pointer, patch vs root-cause fix.
 2. **Systemic patterns** — issues appearing in ≥ 2 repos (the four vendor
    sync services are the prime suspects). For each: which repos, the shared

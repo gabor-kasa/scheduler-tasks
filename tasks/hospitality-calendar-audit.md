@@ -3,6 +3,8 @@ id: hospitality-calendar-audit
 icon: calendar
 title: "Audit [Hospitality] team meetings against scheduling rules"
 type: recurring
+model: claude-opus-4-8
+effort: high
 schedule: "0 8 * * 1"
 created: 2026-05-11T15:05:00+02:00
 status: active

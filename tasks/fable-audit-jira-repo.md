@@ -3,6 +3,8 @@ id: fable-audit-jira-repo
 icon: magnifyingglass
 title: "Fable audit: jira (personal tooling repo)"
 type: oneoff
+model: claude-opus-4-8
+effort: high
 schedule: 2026-06-19T03:00:00+02:00
 next_run: 2026-06-19T03:00:00+02:00
 created: 2026-06-11T17:30:00+02:00
