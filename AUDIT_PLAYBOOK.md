@@ -30,7 +30,7 @@ gracefully and record what you skipped.
   fan the static review dimensions out to parallel subagents and
   adversarially verify bug findings before reporting them. Prefer ~10 strong,
   verified findings over 40 maybes. Keep total subagent count reasonable
-  (≤ ~15); 17 of these runs share one weekly token budget.
+  (≤ ~15); 13 of these runs share one weekly token budget.
 - **Write the report incrementally.** Create the report file after Step 0
   and append/update each section as its step completes — do not save the
   whole write-up for the end. A run that dies mid-audit must still leave a
