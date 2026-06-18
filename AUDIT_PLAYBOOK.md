@@ -173,16 +173,34 @@ service genuinely has no Datadog presence, say so and move on.
    recommendation — dead endpoints are free maintenance burden and attack
    surface.
 
-## Step 4 — AWS-dependent checks (expect expired creds; degrade gracefully)
+## Step 4 — AWS-dependent checks (frozen env creds, NOT real SSO expiry — strip them first)
 
-Overnight the SSO session is almost certainly expired, and the scheduler
-freezes env creds at spawn. Check with
-`env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN aws sts get-caller-identity`
-(the `env -u` strips frozen env creds so the SSO profile is actually tried).
-If creds work: run DLQ status for the repo's queues (`shared-kasa-dlq-status`
-approach) and any CloudWatch/SQS checks that add signal. If not: **skip
-silently into the report** — add a "Skipped: AWS checks (expired
-credentials)" line, keep `Status: success`, and do not retry-loop.
+The scheduler app freezes whatever short-lived STS creds were in its
+environment at launch into `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+`AWS_SESSION_TOKEN`, and the spawned `claude -p` inherits them. The AWS SDK
+reads those env vars **before** the SSO profile, so once they expire every
+`aws` call returns "Token has expired" / "Forbidden" — **even though the
+on-disk SSO profile is still valid.** This is a known quirk, not an outage:
+a bare `aws sts get-caller-identity` will lie to you and report dead creds.
+
+So the **only** sanctioned way to touch AWS in this run is with the three
+frozen vars stripped, which lets the SDK fall through to the SSO profile:
+
+    env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN aws sts get-caller-identity
+
+Rules:
+- **Never** run a bare `aws …` and conclude from its error that creds are
+  dead. That error is expected and means nothing until you've retried with
+  `env -u`. Prefix **every** AWS command in the run with the `env -u …` form
+  (or `unset` the three vars once at the top of the AWS step).
+- If the `env -u` probe **succeeds**: run DLQ status for the repo's queues
+  (`shared-kasa-dlq-status` approach) and any CloudWatch/SQS checks that add
+  signal — all via the env-stripped form.
+- Only if the **`env -u` probe itself** fails do you skip: that means the SSO
+  profile really is expired (no human ran `aws-login`). Then **skip silently
+  into the report** — add a "Skipped: AWS checks (SSO profile expired even
+  after stripping frozen env creds)" line, keep `Status: success`, and do not
+  retry-loop. Reaching the skip branch off a bare-command error is a bug.
 
 ## Step 5 — Cost picture & right-sizing
 
