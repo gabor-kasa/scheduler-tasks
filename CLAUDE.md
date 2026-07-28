@@ -75,8 +75,11 @@ When the scheduler fires a task it injects these rules into the prompt;
 they're repeated here so an interactive session authoring a task knows the
 shape it has to produce:
 
-- The run appends its narrative to a log file in `logs/`, then an
-  `## Outcome` block with:
+- The run appends its narrative to the `## Execution` section of a log file
+  in `logs/`, then a `## Report` section holding the actual deliverable
+  (findings, digest, list — whatever the task's `## Instructions` ask for,
+  in whatever section structure they prescribe), then an `## Outcome` block
+  with:
   - **Status:** `success` | `failure` | `skipped`
   - **Severity:** `ok` (silent default) | `attention` (succeeded but the
     user should look — anomalies, items to triage) | `failure` (errored).
@@ -89,6 +92,13 @@ shape it has to produce:
   `body` required) to fire a native desktop banner beyond what `Severity:`
   surfaces. Tasks never shell out to a notifier — they only append this
   block and the app delivers it.
+
+Once the run ends the app reorders the log into reading order —
+**Outcome → Notification → Report → Execution** — so opening a run shows the
+result, then the deliverable, and the how-it-got-there narrative only if you
+scroll. A task writes in working order (Execution → Report → Outcome) and
+never has to arrange the file itself. A log with no `## Report` section falls
+back to the older shape (Outcome first, everything else after).
 
 ## Pre-authorized mutations
 
