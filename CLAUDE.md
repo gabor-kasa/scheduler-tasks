@@ -46,11 +46,15 @@ optional first-fire **seed**; `last_run` is optional. The body has
 - `schedule` accepts a 5-field cron expression or `every Nh|m|d|w`.
 - `model` / `effort` (both optional) pin the model and thinking level for
   this task's runs. `model` is any `claude --model` value (e.g.
-  `claude-opus-4-8`); `effort` is `low|medium|high|xhigh|max`. Omit either to
-  use the app default (`claude-sonnet-4-6`) / the model's default effort. The
-  resolved model is recorded in each run-log header (`- **Model:**`). Heavy
-  review/audit tasks pin `claude-opus-4-8` + `high`; simple digests can stay
-  default or use `claude-haiku-4-5` to save cost.
+  `claude-opus-5`); `effort` is `low|medium|high|xhigh|max`. Omit either to
+  use the app default (`claude-sonnet-5`) / the model's default effort. The
+  resolved model is recorded in each run-log header (`- **Model:**`) — that
+  header, not this file, is what the run actually used. The default lives in
+  the app (`TaskRunner.defaultModel`), so editing this line cannot change it;
+  the two drifted apart once already and every unpinned task silently ran a
+  generation behind until 2026-08-11. Heavy review/audit tasks pin
+  `claude-opus-5` + `high`; simple digests can stay default or use
+  `claude-haiku-4-5` to save cost.
 - Start from `TASK_TEMPLATE.md`; `EXAMPLE_TASK.md` has worked samples.
 
 The live `next_run` / `last_run` live in the gitignored

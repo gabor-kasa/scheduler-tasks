@@ -3,7 +3,7 @@ id: <slug-with-no-spaces>
 icon: <optional SF Symbol name, e.g. calendar, lock.shield, chart.bar>
 title: <human-readable title>
 type: <oneoff | recurring>
-model: <optional — e.g. claude-opus-4-8; omit for the app default (claude-sonnet-4-6)>
+model: <optional — e.g. claude-opus-5; omit for the app default (claude-sonnet-5)>
 effort: <optional — low | medium | high | xhigh | max; omit for the model default>
 schedule: <see options below>
 next_run: <ISO 8601 datetime in LOCAL time, e.g. 2026-05-12T09:00:00+02:00>
@@ -54,16 +54,16 @@ content. See `CRON_PROMPT.md` → "Step 3.5 — Optional desktop notification".
 
 ## Optional: model & effort
 
-By default a task runs on the app's default model (`claude-sonnet-4-6`) at
+By default a task runs on the app's default model (`claude-sonnet-5`) at
 the model's default effort. Pin a stronger model and/or a thinking (effort)
 level per task in the frontmatter:
 
 ```
-model: claude-opus-4-8      # any valid `claude --model` value
+model: claude-opus-5        # any valid `claude --model` value
 effort: high                # low | medium | high | xhigh | max
 ```
 
-Put heavy review/audit work on a more capable model (`claude-opus-4-8`,
+Put heavy review/audit work on a more capable model (`claude-opus-5`,
 effort `high`) while leaving simple digests on the cheaper default — or pin
 those to `claude-haiku-4-5` to save cost. Omit either key to fall back to the
 default. The resolved model is recorded in each run's log header
