@@ -24,11 +24,10 @@ available, but missed for months. Catching that class of thing — ideally
 *before* it's old news — is the whole point of this task.
 
 This is **not** a usage or cost report. Do **not** grade model-tier choices,
-token spend, session length, or Bash-vs-Read ratios. Earlier versions of this
-task drifted into exactly that and it was noise — it kept re-flagging the same
-mechanical knobs and never told Gabor anything he could adopt. If a mechanical
-metric ever matters, it's only as *evidence that some capability would help*,
-never as a finding on its own.
+token spend, session length, or Bash-vs-Read ratios — re-flagging mechanical
+knobs is noise Gabor can't act on. If a mechanical metric ever matters, it's
+only as *evidence that some capability would help*, never as a finding on its
+own.
 
 ### Step 1 — What does Gabor actually use? (local)
 
@@ -112,8 +111,8 @@ Rules:
 
 - **No repeats without escalation.** Read prior `logs/weekly-insights-review-*.md`.
   If you already surfaced an item and it's *still* unused, only re-raise it with
-  a sharper, more specific hook — never restate it verbatim. (Restating the same
-  finding week after week is the failure mode that prompted this rewrite.)
+  a sharper, more specific hook — never restate it verbatim. A finding restated
+  week after week trains Gabor to skip the report.
 - **Silence is allowed.** If nothing genuinely new shipped and nothing
   high-value is sitting unused, say so plainly, set `Severity: ok`, and skip the
   notification. A quiet week is an honest result — do **not** manufacture a

@@ -189,11 +189,9 @@ etc.). The digest answers "what's merged to master but not yet released/
 deployed?" — release hygiene, so nothing valuable sits un-shipped and
 forgotten.
 
-Built from a one-off analysis on 2026-06-01. The list is discovered fresh
-each run (Step 1) rather than pinned, because releases move fast — within the
-same afternoon that day, four repos went from "ahead" to released
-(callbox-automation, remotelock-sync, salto-sync, smartthings-sync). A
-hardcoded list would rot immediately.
+The list is discovered fresh each run (Step 1) rather than pinned, because
+releases move fast — repos can go from "ahead" to released within a single
+afternoon, so a hardcoded list would rot immediately.
 
 Pairs with the weekday morning tasks ([[pr-review-queue]] 06:30,
 [[lock-services-error-summary]] 07:00) but runs **weekly** on Monday 07:30 —

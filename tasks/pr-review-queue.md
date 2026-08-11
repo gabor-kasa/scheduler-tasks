@@ -3,7 +3,7 @@ id: pr-review-queue
 icon: arrow.triangle.pull
 title: Morning PR review queue — triage, dependabot, /review
 type: recurring
-model: claude-opus-4-8
+model: claude-opus-5
 effort: high
 schedule: "30 6 * * 1-5"
 created: 2026-05-29T18:00:00+02:00
@@ -30,6 +30,7 @@ The list (add a repo name to opt out of more):
 - `payment-requests-service`
 - `sns-events`
 - `url-shortener-api-client`
+- `url-shortener`
 - `stripe-sync`
 
 The task does these, in priority order:
@@ -158,8 +159,14 @@ For each human by-name PR:
    5-minute timeout:
 
    ```bash
-   (cd ../<repo> && claude -p --output-format text < /tmp/pr-review-<repo>-<num>.md)
+   (cd ../<repo> && claude -p --model claude-opus-5 --effort high \
+      --output-format text < /tmp/pr-review-<repo>-<num>.md)
    ```
+
+   The inner review does **not** inherit the outer run's model — without
+   `--model` it falls back to the CLI default. Keep both flags in sync with
+   this task's `model:` / `effort:` frontmatter: the inner call is where the
+   review quality actually comes from.
 
    Capture stdout. Delete the temp file.
 3. If the call errors / times out / returns empty, record a
@@ -217,11 +224,20 @@ major/group bump keeps the bare listing.
 
 **5c. Failing →** attempt a fix, else comment. See Step 6.
 
-Skip entirely if `dependabot["kasadev/<repo>#<num>"].sha == head` AND its
+Skip the **work** if `dependabot["kasadev/<repo>#<num>"].sha == head` AND its
 prior `action` was `commented`, `pushed`, `pushed-source`, `safe`, or
 `analyzed`, **AND the PR's current CI is not red** (from the `gh pr checks` at the top of this
-step, no required check is `fail`) — already handled at this exact SHA; just
-note "already handled (no new commits)".
+step, no required check is `fail`) — already handled at this exact SHA, so
+don't re-analyse it, don't re-comment, don't re-push.
+
+**Skipping the work is never skipping the listing.** The PR is still open and
+still waiting on Gabor, so it must still appear in the report — one line under
+**🕓 Still open from earlier runs** (Step 7), carrying its stored `action` and
+the date it was handled. Dropping it from the log is a bug, and the most
+dangerous kind: a PR the task itself pushed to (`pushed`/`pushed-source`) has
+the task's own commit as its head sha, so **no new sha will ever arrive** — if
+it isn't listed, it is invisible forever. This is the green mirror of the
+red-PR freeze described just below.
 
 **A red PR is never "handled."** If a required check is currently `fail` at
 the stored sha, do **not** skip on any stored action — re-evaluate the PR
@@ -778,7 +794,7 @@ git -C /tmp/pr-fix-<repo>-<num> add -A
 #   "fix: adjust handleMessage typing for sqs-consumer v15"
 git -C /tmp/pr-fix-<repo>-<num> commit -m "<accurate message>
 
-Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 git -C /tmp/pr-fix-<repo>-<num> push origin HEAD:<headRef>
 ```
 
@@ -849,12 +865,10 @@ afterward; if either changed, note it loudly in the log.
 
 ### Step 7 — Write the log + persist state
 
-**🚨 Output contract — emit the report exactly ONCE, then stop.** This is the
-most important rule of this step. The run's stdout IS the log: produce the
-report below **one single time** as your final output, then end the run. Do
-**not** regenerate, re-print, or "draft then redo" the report. A repeated
-report is a known failure mode — it triples the log and makes the app fire
-the desktop banner multiple times.
+**Output contract — emit the report once, then stop.** The run's stdout IS the
+log: produce the report below a single time as your final output, then end the
+run. Don't regenerate, re-print, or "draft then redo" it — a repeated report
+triples the log and makes the app fire the desktop banner several times.
 
 - Exactly **one** `# PR review queue — <date>` report in the whole run.
 - Exactly **one** `## Outcome` block, and **at most one** `## Notification`
@@ -868,13 +882,37 @@ the desktop banner multiple times.
 - When the report ends, the run is done. Do not continue with further turns,
   commentary, or a second pass.
 
+**🧮 Accounting — every searched PR appears exactly once.** Step 1's search
+returned a definite number of PRs (`total_count`). Every single one must land
+in exactly one section of the report — **including the ones no work was done
+on**: drafts, group-assigned, opt-out removals, and already-handled dependabot
+PRs per Step 5's skip gate. "Nothing to do this run" is a reason to write a
+one-liner, never a reason to omit. Before emitting the report:
+
+1. Count the PRs listed across **all** sections.
+2. Assert that count equals Step 1's search count.
+3. If it doesn't reconcile, you have dropped a PR — go find it and list it.
+   Never emit a report you know doesn't add up.
+
+Open the headline with the reconciliation — `<N> PRs in queue · …` — so the
+arithmetic is visible to Gabor and a hole surfaces as a wrong number instead of
+a silent omission.
+
+**Headline and Summary counts are derived, never freehand.** Write the sections
+first, then count what is actually in them to build the headline and the
+`Summary:` line. Do not compose counts from memory as you go — they drift from
+what the sections actually contain.
+
 Write the run log in this structure (omit a section's items but keep the
 heading with `_None._` if empty, for a stable shape):
 
 ```
 # PR review queue — <TODAY local>
 
-<headline: e.g. "3 need your review · 2 dependabot fixed · 1 commented · 4 safe to merge · 5 group-assigned (excluded)">
+<headline — counts DERIVED from the sections below, opening with the queue
+ reconciliation, e.g. "15 PRs in queue · 3 need your review · 2 dependabot
+ fixed · 1 commented · 4 safe to merge · 2 still open from earlier runs ·
+ 5 group-assigned (excluded) · 1 draft">
 
 ## ⚠️ Needs your review
 ### <repo>#<num> — <title>  ·  by <author>  ·  +<adds>/-<dels>, <files> files
@@ -920,6 +958,10 @@ heading with `_None._` if empty, for a stable shape):
 <analysis comment posted to PR | log only>
 ### ⏳ CI still running
 - <repo>#<num> <title> <url>
+### 🕓 Still open from earlier runs (already handled at this sha — no action taken)
+<every dependabot PR the Step 5 skip gate skipped. Green and still waiting on
+ Gabor; listed so it can't go invisible, but NOT re-analysed and NOT re-pushed:>
+- <repo>#<num> <title> — <bump>; green, `<action>` on <YYYY-MM-DD>; <awaiting your approval | ready to merge>. <url>
 
 ## 👥 Group-assigned via hospitality (excluded — not yours by name)
 - <repo>#<num> <title> by <author> <url>
@@ -956,9 +998,16 @@ Severity:
   counts as a safe-to-merge PR waiting.) (The normal weekday state.)
 - `ok` — nothing actionable: no human PRs needing review, no failing
   dependabot, nothing safe-to-merge waiting (only group-assigned /
-  already-reviewed / pending / auto-removed-opt-out). Auto-removing Gabor
-  from an opt-out repo is routine cleanup — log it, but it never by itself
-  bumps severity or fires a notification.
+  already-reviewed / pending / auto-removed-opt-out / still-open-from-earlier
+  -runs). Auto-removing Gabor from an opt-out repo is routine cleanup — log
+  it, but it never by itself bumps severity or fires a notification.
+
+**🕓 Still open from earlier runs never bumps severity.** Those PRs were
+already surfaced on the day they were handled; re-firing a banner every
+morning until Gabor merges them would train him to ignore the banner. They
+stay **visible in the report** (that's the whole point of the section) and
+**silent in the notification** — same treatment as an opt-out removal. A PR
+only bumps severity on the run that *does* something to it.
 
 If `attention` or `failure`, append a `## Notification` block:
 
@@ -1024,9 +1073,8 @@ This is Gabor's highest-frequency activity — reviewing PRs across HSP
 repos — plus the toil around dependabot churn. It fires at 06:30 on
 weekdays, before standup and alongside [[slack-digest]] (06:00).
 
-No AWS SSO needed (unlike [[one-on-one-prep]]) — this task only needs
-`gh` (persistent token) and the local repo clones. It does not wait in a
-poll loop.
+No AWS SSO needed — this task only needs `gh` (persistent token) and the
+local repo clones. It does not wait in a poll loop.
 
 ### What counts as "by name" vs "group"
 
@@ -1038,7 +1086,7 @@ are listed-and-excluded — Gabor only wants to act on by-name requests.
 
 ### Reviewer opt-out repos
 
-Some repos (currently `simulator-service`) have a team-only CODEOWNERS
+The repos in the opt-out list (Instructions intro) have a team-only CODEOWNERS
 (`* @kasadev/hospitality`), but the `hospitality` team's GitHub
 **code-review-assignment** rotates a subset of members onto each PR *by
 name* — so Gabor lands in `requested_reviewers` individually even though
@@ -1189,7 +1237,7 @@ gathers candidates and accepts the first that actually carries `<new>`:
   (Step 6a) which is posted **without** the marker so dependabot can parse
   it.
 - **Spawning `claude -p`** in `../<repo>` for the human-PR `/review` is
-  the core mechanic (same pattern as [[one-on-one-prep]]).
+  the core mechanic.
 
 ### Explicitly NOT authorized
 
