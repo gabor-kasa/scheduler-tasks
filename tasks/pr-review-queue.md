@@ -13,18 +13,33 @@ status: active
 ## Instructions
 
 You build Gabor's morning pull-request review queue. GitHub login is
-`gabor-kasa`, org is `kasadev`, the relevant GitHub team is
+`gabor-kasa`, the work org is `kasadev`, the relevant GitHub team is
 `kasadev/hospitality`. Local timezone Europe/Budapest. All local repo
 clones live as siblings of this scheduler tree under
 `/Users/balazsgabor/Documents/workspace/kasa/<repo>` (i.e. `../<repo>`
-from the project root).
+from the project root), and that holds for the personal repo below too
+(`../jira`).
+
+**The queue has two sources.** Every `<owner>/<repo>` in this task is a
+variable, not always `kasadev`:
+
+- **A. `kasadev` review requests.** Every open PR in the org where
+  `gabor-kasa` is a requested reviewer (Step 1, source A). This is the bulk of
+  the queue, and the by-name / group split below applies to it.
+- **B. `gabor-kasa/jira`, wholesale.** Gabor's own private repo, the Jira
+  dashboard at jiradashboard.kasa.dev. He is the sole owner, so nothing ever
+  *requests* him as a reviewer there and source A can never see it. Take
+  **every open PR in that repo** and treat it as **by-name**: his own human PRs
+  (a self-review he reads before merging) and its dependabot PRs alike. The
+  repo-specific gotchas are in "### Source B, `gabor-kasa/jira`" under
+  `## Context`.
 
 **Reviewer opt-out repos.** Gabor no longer reviews these repos, but the
 `hospitality` team's GitHub code-review-assignment keeps rotating him onto
 their PRs *by name*. For any PR in one of these repos where `gabor-kasa` is
 a requested reviewer, the task **removes him as a reviewer** (himself only —
 never another reviewer, never the team) and does nothing else with the PR.
-The list (add a repo name to opt out of more):
+The list (all `kasadev` repos; add a repo name to opt out of more):
 
 - `simulator-service`
 - `payment-requests-service`
@@ -39,8 +54,9 @@ The task does these, in priority order:
    Gabor is a requested reviewer, remove him as a reviewer (himself only)
    and take no further action on that PR.
 
-1. **Triage** every PR where Gabor is a requested reviewer **by name**,
-   splitting human-authored PRs (→ run `/review`) from dependabot PRs
+1. **Triage** every PR where Gabor is a requested reviewer **by name**, plus
+   every open PR in `gabor-kasa/jira` (source B, always by-name), splitting
+   human-authored PRs (→ run `/review`) from dependabot PRs
    (→ build-check + safe-to-merge / fix / comment, **never** `/review`).
 2. **Exclude** PRs where Gabor is only pulled in via the `hospitality`
    team (not requested by name) — list them so he knows, take no action.
@@ -58,10 +74,14 @@ Read `logs/pr-review-state.json` (JSON; create `{ "reviewed": {},
 
 ```json
 {
-  "reviewed":   { "kasadev/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>" } },
-  "dependabot": { "kasadev/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|analyzed|rebase|recreate|skipped-env", "at": "<iso>" } }
+  "reviewed":   { "<owner>/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>" } },
+  "dependabot": { "<owner>/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|analyzed|rebase|recreate|skipped-env", "at": "<iso>" } }
 }
 ```
+
+Keys are owner-qualified, so `kasadev/css-api#136` and `gabor-kasa/jira#64`
+coexist. Entries written before source B existed already carry the `kasadev/`
+prefix, so they keep matching. No migration needed.
 
 This is how the task avoids re-reviewing unchanged PRs and re-commenting
 / re-pushing the same dependabot PR every morning. Write it back in
@@ -69,26 +89,44 @@ Step 7.
 
 ### Step 1 — Build the queue
 
-One search gets the union of by-name and team-requested PRs (GitHub's
-`review-requested:` includes PRs you're pulled into via team
-membership):
+**Source A. `kasadev` review requests.** One search gets the union of by-name
+and team-requested PRs (GitHub's `review-requested:` includes PRs you're pulled
+into via team membership):
 
 ```bash
 gh api -X GET /search/issues \
   --raw-field q='is:open is:pr review-requested:gabor-kasa archived:false' \
-  --jq '.items[] | {repo:(.repository_url|split("/")|last), num:.number, title:.title, author:.user.login, url:.html_url}'
+  --jq '.items[] | {owner:(.repository_url|split("/")|.[-2]), repo:(.repository_url|split("/")|last), num:.number, title:.title, author:.user.login, url:.html_url}'
 ```
 
 `archived:false` drops archived repos (e.g. `pms-api-client`) — those
 are safe to skip entirely. Paginate (`&page=2…`) if `total_count`
 exceeds the page size.
 
+**Source B. `gabor-kasa/jira`, every open PR.** No review is ever requested
+from Gabor in his own repo, so this one is listed directly instead of searched:
+
+```bash
+gh pr list --repo gabor-kasa/jira --state open \
+  --json number,title,author,isDraft,headRefName,url \
+  --jq '.[] | {owner:"gabor-kasa", repo:"jira", num:.number, title:.title, author:.author.login, url:.url}'
+```
+
+Careful with the author here: `gh pr list` renders a bot as `app/dependabot`,
+not `dependabot[bot]`. The Step 2 `gh api .../pulls/<num>` fetch returns the
+canonical `dependabot[bot]` login, so classify on that, never on this listing.
+
+**The queue is the union of A and B**, deduplicated by `<owner>/<repo>#<num>`.
+They can't overlap today, but don't list a PR twice if that ever changes. The
+Step 7 accounting count is the size of that union, source A's `total_count`
+**plus** the source B PRs, not A alone.
+
 ### Step 2 — Classify each PR
 
 For every PR from Step 1, fetch detail:
 
 ```bash
-gh api /repos/kasadev/<repo>/pulls/<num> --jq '{
+gh api /repos/<owner>/<repo>/pulls/<num> --jq '{
   reviewers:[.requested_reviewers[].login],
   teams:[.requested_teams[].slug],
   author:.user.login, draft:.draft, head:.head.sha,
@@ -103,8 +141,9 @@ branch trails its base. When `../<repo>` exists, both are best fixed by
 in a worktree + lockfile regen. Only fall back to asking dependabot to
 rebase (Step 6a) when there's no local clone.
 
-**Opt-out repos first.** Before bucketing, if the PR's repo is in the
-*reviewer opt-out* list (Instructions intro) AND `gabor-kasa` ∈ `reviewers`,
+**Opt-out repos first (source A only).** Before bucketing, if the PR's repo is
+in the *reviewer opt-out* list (Instructions intro) AND `gabor-kasa` ∈
+`reviewers`,
 this is one Gabor has opted out of reviewing. Remove him as a requested
 reviewer — himself only:
 
@@ -123,9 +162,17 @@ name* on a later PR, which is then removed again. That's expected.)
 
 Then bucket:
 
-- **by_name** = `gabor-kasa` ∈ `reviewers`. These are Gabor's to act on.
+- **by_name** = `gabor-kasa` ∈ `reviewers`, **or** the PR came from source B
+  (`gabor-kasa/jira`). These are Gabor's to act on.
 - **group_only** = NOT by_name (he's only in via the `hospitality` team
   or another team). → Step 3 (list and exclude, no action).
+
+**Source B is always by_name**, and the opt-out list never applies to it. Its
+`requested_reviewers` is empty, because GitHub can't request a review from the
+repo's sole owner, so gating on `reviewers` would silently drop the whole repo.
+There is no `group_only` bucket and no reviewer removal in `gabor-kasa/jira`.
+Its human PRs are usually authored by `gabor-kasa` himself, and reviewing his
+own PR before he merges is exactly the point. The draft rule still applies.
 
 Within **by_name**, split on author:
 
@@ -150,7 +197,7 @@ is the reviewer; dismissing would drop the request for the whole team.)
 
 For each human by-name PR:
 
-1. **Skip-if-unchanged:** if `reviewed["kasadev/<repo>#<num>"].sha`
+1. **Skip-if-unchanged:** if `reviewed["<owner>/<repo>#<num>"].sha`
    equals the current `head` sha, do **not** re-review. Record it for the
    compact "Previously reviewed — no new commits" list and move on.
 2. Otherwise spawn an inner Claude to review it. Build the inner prompt
@@ -171,7 +218,7 @@ For each human by-name PR:
    Capture stdout. Delete the temp file.
 3. If the call errors / times out / returns empty, record a
    `(review failed: <reason>)` placeholder and continue.
-4. On success, set `reviewed["kasadev/<repo>#<num>"] = { sha: <head>, at: <now> }`.
+4. On success, set `reviewed["<owner>/<repo>#<num>"] = { sha: <head>, at: <now> }`.
 
 The inner review is for **Gabor's eyes only** — it must NOT post anything
 to GitHub. Its stdout goes verbatim into the log.
@@ -181,7 +228,7 @@ to GitHub. Its stdout goes verbatim into the log.
 For each dependabot by-name PR, get CI status:
 
 ```bash
-gh pr checks <num> --repo kasadev/<repo>
+gh pr checks <num> --repo <owner>/<repo>
 ```
 
 Output is tab-separated `name⇥status⇥duration⇥url`; `status` is
@@ -206,6 +253,10 @@ compare view" and Gabor opens the PR blind. For every **green** internal
 safe to merge. Public-package bumps already embed dependabot's release
 notes/changelog in the PR body, so they keep the existing bare listing.
 
+`gabor-kasa/jira` has **no** `@kasadev/*` dependencies, so every source B bump
+is a public-package bump: Step 5i never runs for one, and its major / group PRs
+keep the bare listing.
+
 Then:
 
 **5a. Green + single patch/minor →** add to **✅ Safe to merge**. Do NOT
@@ -224,7 +275,7 @@ major/group bump keeps the bare listing.
 
 **5c. Failing →** attempt a fix, else comment. See Step 6.
 
-Skip the **work** if `dependabot["kasadev/<repo>#<num>"].sha == head` AND its
+Skip the **work** if `dependabot["<owner>/<repo>#<num>"].sha == head` AND its
 prior `action` was `commented`, `pushed`, `pushed-source`, `safe`, or
 `analyzed`, **AND the PR's current CI is not red** (from the `gh pr checks` at the top of this
 step, no required check is `fail`) — already handled at this exact SHA, so
@@ -478,7 +529,7 @@ bump analysis" comment.
   failure). Re-run the analysis; if it now reaches a concrete verdict, post a
   **fresh corrected comment** that supersedes the inconclusive one.
 
-Post with `gh pr comment <num> --repo kasadev/<repo> --body-file <tmp>`. Record
+Post with `gh pr comment <num> --repo <owner>/<repo> --body-file <tmp>`. Record
 `dependabot[...] = {sha, action:"analyzed"}` **only on a concrete verdict**, so
 a resolved PR is treated as handled (unless CI is red — then re-evaluate per the
 red-PR rule). For an inconclusive verdict, **leave the action unrecorded** so
@@ -543,6 +594,29 @@ entry (6c-ii).
 the PR's own head branch and leaves it green for Gabor to merge. It never
 merges, and never pushes to `master`/`main`/`dev`.
 
+**Source B specifics (`gabor-kasa/jira`).** The whole dependabot path applies
+here unchanged. Three repo facts change how you verify it, and the fourth is a
+hard rule:
+
+1. **Verify with the CI job commands, not `npm test` at the root.** It's an npm
+   workspaces monorepo (`shared`, `backend`, `frontend`) whose root `test`
+   script is a deliberate `exit 1`, so a root `npm test` always fails and
+   proves nothing. The full suite is what
+   `.github/workflows/pr-validation.yml` runs: `npm ci` at the root, then
+   `npm run typecheck` and `npm test -- --run` in `backend/`, and
+   `npm run lint` and `npm run build` in `frontend/`. Read that workflow rather
+   than trusting this list, since the two jobs (`Backend (typecheck + tests)`
+   and `Frontend (lint + build)`) can be renamed or added to.
+2. **No `client/CHANGELOG.md` and no `dependabot-changelog-helper` action**, so
+   6c-ii never applies here, and the "bot refused the rebase because
+   `github-actions[bot]` committed on top" cause behind 6a-verify doesn't arise
+   in this repo.
+3. **No `@kasadev/*` dependencies**, so 6-skip's npm-auth block can't trigger.
+4. 🚨 **Never push to, or merge into, `jira`'s `master`.** `deploy-production.yml`
+   fires on every push to `master` and deploys straight to production
+   (jiradashboard.kasa.dev). The existing rule already forbids it. Flagged
+   because here a slip ships to prod instead of just annoying someone.
+
 **6a-verify. Did a previously-issued bot command land?**
 
 Reach here when state shows `action:"rebase"` or `action:"recreate"` for
@@ -552,7 +626,7 @@ commit — so an unchanged sha means the command either hasn't run yet or
 the bot refused it. Read dependabot's **latest** reply to decide:
 
 ```bash
-gh pr view <num> --repo kasadev/<repo> --json comments \
+gh pr view <num> --repo <owner>/<repo> --json comments \
   --jq '[.comments[] | select(.author.login=="dependabot")] | last | .body'
 ```
 
@@ -578,7 +652,7 @@ wouldn't be here), an unchanged sha + a refusal reply means it's stuck:
   command:
 
   ```bash
-  gh pr comment <num> --repo kasadev/<repo> --body '@dependabot recreate'
+  gh pr comment <num> --repo <owner>/<repo> --body '@dependabot recreate'
   ```
 
   `recreate` rebuilds the PR from scratch against current `master`,
@@ -604,7 +678,7 @@ clearly a stale-branch artifact, comment the bare bot command and stop
 here for this PR:
 
 ```bash
-gh pr comment <num> --repo kasadev/<repo> --body '@dependabot rebase'
+gh pr comment <num> --repo <owner>/<repo> --body '@dependabot rebase'
 ```
 
 **No `[Claude]` marker on this comment** — dependabot parses the comment
@@ -826,7 +900,7 @@ the root-cause one-liner, and a concrete suggested patch. Add to "💬
 Commented — needs you". Record `dependabot[...] = {sha, action:"commented"}`.
 
 Idempotency: before posting in 6d (or 6c's confirmation comment), if
-`dependabot["kasadev/<repo>#<num>"].sha == head` and a prior `[Claude]`
+`dependabot["<owner>/<repo>#<num>"].sha == head` and a prior `[Claude]`
 comment already exists on the PR at this SHA, do NOT re-comment.
 
 **6e. Comment format — ALWAYS mark Claude-authored comments.**
@@ -848,7 +922,7 @@ clause when the bump isn't major):
 
 > ⚠️ This pushed a **source-code** change to satisfy the bump, on a MAJOR version bump — green CI confirms it compiles and tests pass locally, but **review the runtime semantics before merging**, not just the green check.
 
-Post with `gh pr comment <num> --repo kasadev/<repo> --body-file <tmp>`.
+Post with `gh pr comment <num> --repo <owner>/<repo> --body-file <tmp>`.
 (The `@dependabot rebase` command in 6a is the **only** exception — it is
 posted bare, with no marker, so dependabot can parse it.)
 
@@ -882,15 +956,16 @@ triples the log and makes the app fire the desktop banner several times.
 - When the report ends, the run is done. Do not continue with further turns,
   commentary, or a second pass.
 
-**🧮 Accounting — every searched PR appears exactly once.** Step 1's search
-returned a definite number of PRs (`total_count`). Every single one must land
+**🧮 Accounting — every queued PR appears exactly once.** Step 1 produced a
+definite queue: source A's `total_count` plus source B's open PRs,
+deduplicated. Every single one must land
 in exactly one section of the report — **including the ones no work was done
 on**: drafts, group-assigned, opt-out removals, and already-handled dependabot
 PRs per Step 5's skip gate. "Nothing to do this run" is a reason to write a
 one-liner, never a reason to omit. Before emitting the report:
 
 1. Count the PRs listed across **all** sections.
-2. Assert that count equals Step 1's search count.
+2. Assert that count equals the size of Step 1's union (A + B).
 3. If it doesn't reconcile, you have dropped a PR — go find it and list it.
    Never emit a report you know doesn't add up.
 
@@ -902,6 +977,11 @@ a silent omission.
 first, then count what is actually in them to build the headline and the
 `Summary:` line. Do not compose counts from memory as you go — they drift from
 what the sections actually contain.
+
+PR ids in the report: a bare `<repo>#<num>` for `kasadev` repos (the common
+case, and what the template below shows), owner-qualified as
+`gabor-kasa/jira#<num>` for source B, so a personal-repo PR is never mistaken
+for an org one.
 
 Write the run log in this structure (omit a section's items but keep the
 heading with `_None._` if empty, for a stable shape):
@@ -1032,14 +1112,15 @@ loop back to re-emit the report (Step 7 output contract).
 
 ## Inner review prompt template
 
-Verbatim — the outer task fills `{{REPO}}`, `{{NUM}}`, `{{TITLE}}`,
-`{{AUTHOR}}` and writes the result to a temp file before piping to
+Verbatim — the outer task fills `{{OWNER}}`, `{{REPO}}`, `{{NUM}}`,
+`{{TITLE}}`, `{{AUTHOR}}` and writes the result to a temp file before piping to
 `claude -p` with `../{{REPO}}` as cwd.
 
 ```
 You are reviewing a GitHub pull request for an engineering manager (Gabor) who
-will read your output instead of opening the PR cold. Repo: kasadev/{{REPO}}.
-PR #{{NUM}} — "{{TITLE}}" by {{AUTHOR}}.
+will read your output instead of opening the PR cold. Repo: {{OWNER}}/{{REPO}}.
+PR #{{NUM}} — "{{TITLE}}" by {{AUTHOR}}. If {{AUTHOR}} is `gabor-kasa` this is
+his own PR: review it to the same bar, he wants the findings before he merges.
 
 # Do this
 1. If a `/review` skill is available to you (a "review" skill that reviews a
@@ -1070,8 +1151,9 @@ only nits (or none). No padding, no restating the diff.
 ## Context
 
 This is Gabor's highest-frequency activity — reviewing PRs across HSP
-repos — plus the toil around dependabot churn. It fires at 06:30 on
-weekdays, before standup and alongside [[slack-digest]] (06:00).
+repos — plus the toil around dependabot churn, plus his own private repo
+(source B). It fires at 06:30 on weekdays, before standup and alongside
+[[slack-digest]] (06:00).
 
 No AWS SSO needed — this task only needs `gh` (persistent token) and the
 local repo clones. It does not wait in a poll loop.
@@ -1083,6 +1165,33 @@ directly **and** PRs where the `hospitality` team is the reviewer (he's
 a team member). The task keeps only the ones where `gabor-kasa` is in
 `requested_reviewers` individually ("by name" / code owner). The rest
 are listed-and-excluded — Gabor only wants to act on by-name requests.
+
+This split is a **source A** concept. Source B (`gabor-kasa/jira`) bypasses it
+entirely, see below.
+
+### Source B, `gabor-kasa/jira`
+
+Gabor's own private repo: the Jira dashboard behind jiradashboard.kasa.dev, an
+SST/AWS app laid out as npm workspaces `shared` + `backend` + `frontend`. He
+added it to the queue on 2026-08-28.
+
+It cannot arrive through source A. He is the sole owner, so no review is ever
+requested from him there and `review-requested:gabor-kasa` returns nothing from
+the repo. That's why source B is a direct `gh pr list` plus the "every open PR
+is by-name" rule, rather than another search term.
+
+In practice its open PRs are almost all dependabot. `dependabot.yml` runs npm
+weekly with a limit of 10, grouped by `@mui/*`, `@aws-sdk/*`, `@clerk/*`,
+`@tanstack/*` and a catch-all minor-and-patch group, so most runs route this
+repo through Steps 5 and 6 rather than `/review`. When he does open a human PR
+there, it gets the normal inner `/review`, which is a self-review he reads
+before merging.
+
+Two things behave differently from a `kasadev` service, both in Step 6's
+"Source B specifics": the root `test` script is a deliberate `exit 1`, so
+verifying "the full suite" has to use the per-workspace CI commands, and
+`master` auto-deploys to production, which makes never-push-to-master and
+never-merge load-bearing rather than tidy.
 
 ### Reviewer opt-out repos
 
@@ -1194,6 +1303,7 @@ gathers candidates and accepts the first that actually carries `<new>`:
 ### PRE-AUTHORIZED actions
 
 - **Read-only `gh`:** `gh api -X GET /search/issues`,
+  `gh pr list --repo gabor-kasa/jira --state open` (source B),
   `gh api /repos/.../pulls/...`, `gh pr view`, `gh pr diff`,
   `gh pr checks`, plus the Step 5i source-resolution + changelog lookups
   `gh api /repos/.../releases`, `gh api /repos/.../compare/...`,
@@ -1212,7 +1322,8 @@ gathers candidates and accepts the first that actually carries `<new>`:
   kasadev/<repo> --remove-reviewer gabor-kasa` — but ONLY on PRs in a
   *reviewer opt-out repo* (Instructions intro) and ONLY for `gabor-kasa`
   himself. Never remove another reviewer; never dismiss or drop the
-  `hospitality` team request.
+  `hospitality` team request. This applies to source A only: there are no
+  requested reviewers in `gabor-kasa/jira` and nothing to remove there.
 - **For failing dependabot PRs requested by name only:** `git fetch`,
   `git worktree add`/`remove`, `git rebase origin/master` (to resolve a
   dirty/behind branch in the worktree — Step 6-resolve), package-manager
@@ -1228,6 +1339,12 @@ gathers candidates and accepts the first that actually carries `<new>`:
   major bumps) is pushed only when the full build+lint+test suite passes
   locally, always with the 6e diff + review-semantics comment. Never a
   merge.
+- **The same dependabot authorizations extend to `gabor-kasa/jira`** (source B
+  counts as by-name for every one of them): the throwaway worktree, the
+  install/build/lint/test verification via the per-workspace CI commands, the
+  commit, and the push to the dependabot head branch, plus the `[Claude]`
+  comments and the bare `@dependabot` commands. To the PR's head branch only.
+  **Never to `jira`'s `master`**, where a push auto-deploys production.
 - **PR comments** via `gh pr comment` on dependabot-by-name PRs only:
   diagnosis/confirmation comments always prefixed with the `🤖 **[Claude]**`
   marker (Step 6e) so they're never mistaken for Gabor's own comments;
@@ -1246,7 +1363,9 @@ gathers candidates and accepts the first that actually carries `<new>`:
   **any reviewer other than `gabor-kasa` himself**. Removing Gabor from a PR
   is allowed ONLY in a *reviewer opt-out repo* (Instructions intro);
   everywhere else, group-assigned PRs are listed-and-excluded, not removed.
-- Pushing to any non-dependabot branch, or to `master`/`main`/`dev`.
+- Pushing to any non-dependabot branch, or to `master`/`main`/`dev`. In
+  `gabor-kasa/jira` that is doubly true: `deploy-production.yml` deploys to
+  production on every push to `master`.
 - Posting review output of human-authored PRs to GitHub — that stays in
   the local log for Gabor only.
 - Pushing a **source-touching** fix without the full build+lint+test suite
