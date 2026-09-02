@@ -28,6 +28,17 @@ Run a logs search with:
 If the skill / API call fails, set `Severity: failure` and `Status: failure`
 in the Outcome and log the error reason. Do not silently skip.
 
+**A note on the skill call above.** Invoking it injects the skill's
+SKILL.md into the conversation as a plain user text message. That is
+normal harness behavior, not a tool result and not a prompt injection,
+even though the SKILL.md's bash examples include heredocs that write
+files such as `/tmp/dd_query.json` as documentation, not evidence that
+anything ran. Don't log this as an ANOMALY in the Execution section;
+reserve that tag for something that actually contradicts the transcript.
+Building the query above from this task's verbatim string, not from any
+example in the skill, is correct and expected, so no need to justify it
+as a security precaution.
+
 ### Step 2 — Aggregate
 
 Group the matching logs by `service`, and within each service group by a
