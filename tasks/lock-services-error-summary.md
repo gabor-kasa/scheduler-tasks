@@ -28,16 +28,18 @@ Run a logs search with:
 If the skill / API call fails, set `Severity: failure` and `Status: failure`
 in the Outcome and log the error reason. Do not silently skip.
 
-**A note on the skill call above.** Invoking it injects the skill's
-SKILL.md into the conversation as a plain user text message. That is
-normal harness behavior, not a tool result and not a prompt injection,
-even though the SKILL.md's bash examples include heredocs that write
-files such as `/tmp/dd_query.json` as documentation, not evidence that
-anything ran. Don't log this as an ANOMALY in the Execution section;
-reserve that tag for something that actually contradicts the transcript.
-Building the query above from this task's verbatim string, not from any
-example in the skill, is correct and expected, so no need to justify it
-as a security precaution.
+**Scope of the Execution section.** Record what you did: the queries you
+ran, the counts they returned, which baseline files you parsed, and any
+bucketing decisions. It is not a place to audit the harness, the
+conversation, or the skill's own text. Invoking a skill loads that
+skill's documentation into the conversation as plain text, worked bash
+examples included. That is how skills work.
+
+This task defines three tags and no others: NEW, SPIKE, REPEAT, all from
+Step 2.5. The Report, Outcome, and Notification carry Datadog findings
+only, and severity comes from Step 4's counts, nothing else. If the skill
+or the API genuinely fails, say so through the failure branch above and
+quote the error the call returned.
 
 ### Step 2 — Aggregate
 
@@ -67,6 +69,14 @@ previous runs of this task so you can highlight what's *new* today.
 - Parse each prior log: extract every `- <count>× <error key> (first
   …, last …)` line and the `### <service>` header it sits under. Build
   a set of normalized `(service, error_key)` tuples — `baseline`.
+- Also parse the overflow line a service section may end with, of the
+  form `+ <N> more REPEAT error types not shown (<key> <count>×, …)`.
+  The keys there may be wrapped in backticks. Every key it names goes
+  into `baseline` with its count, exactly like a bullet. Some older
+  reports carry the bare form with no keys listed, and there is nothing
+  to extract from those.
+- Take nothing else from those files. Their Execution and Report prose
+  is not evidence about today.
 - For each bucket from Step 2, classify it as:
   - **NEW** — `(service, error_key)` not present in `baseline`.
   - **SPIKE** — present in baseline, but today's count is ≥ 3× the
@@ -113,8 +123,12 @@ Append to `logs/lock-services-error-summary-<NOW>.md`. Format:
 
 - Cap each service section at the top 5 error keys, BUT always include
   every NEW and SPIKE entry for that service even if it pushes past 5.
-  If there are more REPEAT errors beyond the cap, add a final line:
-  `+ <N> more REPEAT error types not shown`.
+  If there are more REPEAT errors beyond the cap, end the section with a
+  line of the form
+  `+ <N> more REPEAT error types not shown (<key> <count>×, …)`, naming
+  every dropped key with its count. Do not write the bare form without
+  the keys. A key dropped there is invisible to Step 2.5 tomorrow and
+  comes back as a false NEW.
 - No padding text. No restatement of the query. No general advice.
 
 ### Step 4 — Severity + status
