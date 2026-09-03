@@ -61,8 +61,8 @@ then no injection happened and the run confabulated it. Report that as
 Find every line in the run's log matching
 `+ <N> more REPEAT error types not shown`.
 
-- Pass if each one names the dropped keys with their counts in
-  parentheses, naming each key and its count.
+- Pass if each one is followed by a parenthesised list naming every
+  dropped key with its count.
 - Fail if any is the bare form with no keys.
 - Not applicable if no service section exceeded five error keys, in
   which case say so rather than passing silently.
