@@ -62,7 +62,7 @@ Find every line in the run's log matching
 `+ <N> more REPEAT error types not shown`.
 
 - Pass if each one names the dropped keys with their counts in
-  parentheses, e.g. `(\`foo_error\` 3×, \`bar_error\` 1×)`.
+  parentheses, naming each key and its count.
 - Fail if any is the bare form with no keys.
 - Not applicable if no service section exceeded five error keys, in
   which case say so rather than passing silently.
