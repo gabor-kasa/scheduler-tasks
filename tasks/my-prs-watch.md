@@ -5,6 +5,7 @@ title: My open PRs — notify when a reviewer acts
 type: recurring
 model: claude-sonnet-5
 effort: low
+keep_quiet_logs: 1
 schedule: "0,30 9-16 * * 1-5"
 next_run: 2026-09-09T14:00:00+02:00
 created: 2026-09-09T13:50:00+02:00
@@ -27,7 +28,32 @@ The whole value of this task is that a banner means something happened.
 Four signals fire a banner and nothing else does. Everything else goes in
 the log for Gabor to read when he wants to.
 
-### Step 0 — Load state
+### Step 0 — Working-hours guard
+
+The cron schedule fires 09:00-16:30 Mon-Fri, but that is **not** the only
+way this task runs. The app catches up after the Mac sleeps: on 2026-09-09
+the machine slept around 15:32, the 16:00 and 16:30 slots never fired, and
+the overdue run fired at **19:20** instead. A `Run now` from the UI can
+fire at any hour too. Gabor asked for 9 to 5 and meant it, so check the
+wall clock before doing anything else:
+
+```bash
+date +"%u %H%M"    # day-of-week 1-7, then 24h local time
+```
+
+If the day is 6 or 7, or the time is outside `0900`-`1659`, **stop there**:
+
+- Fire no notification.
+- **Do not write `logs/my-prs-state.json`.** This part matters. Quietly
+  refreshing the baseline out of hours would absorb a reviewer's comment
+  into state as though it had already been reported, and the banner for it
+  would never fire. Leaving state untouched means the next in-window run
+  diffs against the last in-window baseline and reports everything that
+  piled up while the machine was asleep.
+- Write a one-line log saying the run was skipped as out-of-hours, with
+  `Severity: ok`, and end the run.
+
+### Step 1 — Load state
 
 Read `logs/my-prs-state.json`. Shape:
 
@@ -53,7 +79,7 @@ If the file is missing or unparseable, treat it as `{"prs":{}}` and run in
 **no** notification. A first run must not banner four days of accumulated
 history at him.
 
-### Step 1 — Build the PR list
+### Step 2 — Build the PR list
 
 ```bash
 gh search prs --author=@me --state=open --json repository,number --limit 50
@@ -80,7 +106,7 @@ If `gh` fails on auth or rate limit, stop, write the error into the log,
 set severity `failure`, and fire a banner saying the watch is blind. A
 silently broken watch is worse than no watch.
 
-### Step 2 — Classify each PR
+### Step 3 — Classify each PR
 
 **Drafts are excluded entirely.** A draft is waiting on Gabor, not on a
 reviewer. List it in the report under Drafts and compute no signals for it.
@@ -129,11 +155,11 @@ out of three raw review entries.
 Devin's review **does** fire a banner, on its own `devin_review` signal,
 and the report labels it as the bot rather than folding it in with people.
 It reviews well after a PR opens (09-07 and 09-08 on PRs created 09-04),
-and the once-per-sha rule in Step 3 caps it at one banner per push, so it
+and the once-per-sha rule in Step 4 caps it at one banner per push, so it
 cannot turn into a drip. Rank it below human activity in the banner body:
 a person waiting on you outranks a bot that already left its notes.
 
-### Step 3 — Diff against state, pick signals
+### Step 4 — Diff against state, pick signals
 
 For each non-draft PR, compare to its stored entry. Exactly four signals
 fire a banner:
@@ -161,7 +187,7 @@ Never fire on: a count going *down* (a deleted comment), `decision` moving
 to `REVIEW_REQUIRED` on its own (that is just a re-request after his push),
 a draft, or a PR that appeared for the first time this run.
 
-### Step 4 — Write the log + persist state
+### Step 5 — Write the log + persist state
 
 **Output contract.** The run's stdout IS the log. Emit the report below
 exactly once as your final output, then end the run. Do not redraft or
@@ -216,10 +242,10 @@ Prune only on `MERGED` or `CLOSED`, and fire the `closed` signal on that same
 transition so the merge is reported rather than silently vanishing. If the
 verify call itself fails, **keep the entry** and note it in the log. A stale
 entry costs one line in a JSON file; a wrongly pruned one costs the watch,
-because Step 3 never fires on a PR seen for the first time, so a re-seeded PR
+because Step 4 never fires on a PR seen for the first time, so a re-seeded PR
 swallows whatever happened while it was missing.
 
-### Step 5 — Severity + Notification
+### Step 6 — Severity + Notification
 
 - `failure` — `gh` failed and the watch could not run. Error text in the log.
 - `attention` — at least one signal fired this run.
@@ -241,6 +267,13 @@ On `attention` or `failure`, append exactly one block:
 
 Skip the block entirely on `ok`. Most runs will be `ok` and produce no
 banner. That is the design working, not a failure.
+
+Those `ok` runs also leave no lasting trace in the Runs list: the
+frontmatter sets `keep_quiet_logs: 1`, so the app keeps only the most
+recent quiet run and deletes the rest. One is kept rather than none on
+purpose — it is the proof the watch is still alive, which matters
+precisely because silence is this task's success state. Runs that fired a
+banner, and any run that failed, are kept normally.
 
 ## Context
 
