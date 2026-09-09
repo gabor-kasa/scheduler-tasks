@@ -5,7 +5,7 @@ title: My open PRs — notify when a reviewer acts
 type: recurring
 model: claude-sonnet-5
 effort: low
-keep_quiet_logs: 1
+quiet: true
 schedule: "0,30 9-16 * * 1-5"
 next_run: 2026-09-09T14:00:00+02:00
 created: 2026-09-09T13:50:00+02:00
@@ -268,12 +268,11 @@ On `attention` or `failure`, append exactly one block:
 Skip the block entirely on `ok`. Most runs will be `ok` and produce no
 banner. That is the design working, not a failure.
 
-Those `ok` runs also leave no lasting trace in the Runs list: the
-frontmatter sets `keep_quiet_logs: 1`, so the app keeps only the most
-recent quiet run and deletes the rest. One is kept rather than none on
-purpose — it is the proof the watch is still alive, which matters
-precisely because silence is this task's success state. Runs that fired a
-banner, and any run that failed, are kept normally.
+Those `ok` runs also leave no trace at all. The frontmatter sets
+`quiet: true`, so the app deletes the run log the moment the run ends.
+Nothing appears in the Runs list and nothing ticks the unread badge. Runs
+that fired a banner are kept, and so is any run that failed. If you want
+to confirm the watch is alive, the Tasks tab shows its last run.
 
 ## Context
 
