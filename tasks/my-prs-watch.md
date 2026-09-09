@@ -62,6 +62,13 @@ gh search prs --author=@me --state=open --json repository,number --limit 50
 Leave it unscoped by org so the personal `gabor-kasa/jira` repo is included
 alongside `kasadev`.
 
+**The set to check is the search result UNION the keys already in state, not
+the search result alone.** `gh search prs` reads GitHub's search index, which
+is eventually consistent and *does* drop open PRs: on 2026-09-09 it returned
+7 PRs at 14:30 and only 4 at 15:00 while all 7 were still open. Treating that
+as "the missing 3 closed" silently dropped three PRs out of the watch. Union
+the two sources and index lag can never shrink the watch.
+
 Then, per PR, pull the detail (this exact command is verified to work):
 
 ```bash
@@ -96,21 +103,28 @@ matching `[bot]`, which covers `dependabot[bot]`.
 
 The extraction, verified against kontrol-ui#3044:
 
+Pipe to real `jq`, not `gh --jq`. **`gh pr view --jq` does not accept
+`--arg`**, so a snippet that references `$skip` there fails with
+`unknown flag: --arg`:
+
 ```bash
 SKIP='gabor-kasa|github-actions|jira-dashboard-kasadev|\[bot\]'
 DEVIN='devin-ai-integration'
-# ... --jq '{
-#   sha: .headRefOid[0:8], draft: .isDraft, dec: (.reviewDecision // "NONE"),
-#   humanReviews:  [.reviews[] |select(.author.login|test($SKIP)|not)
-#                              |select(.author.login != $DEVIN)]|length,
-#   humanComments: [.comments[]|select(.author.login|test($SKIP)|not)
-#                              |select(.author.login != $DEVIN)]|length,
-#   devinReviews:  [.reviews[] |select(.author.login == $DEVIN)]|length,
-#   ciFail: [.statusCheckRollup[]?|select(.conclusion=="FAILURE")]|length }'
+gh pr view <num> --repo <owner>/<repo> --json \
+  number,isDraft,state,reviewDecision,headRefOid,reviews,comments,statusCheckRollup \
+| jq -c --arg skip "$SKIP" --arg devin "$DEVIN" '{
+    state: .state, draft: .isDraft, sha: .headRefOid[0:8],
+    decision: (.reviewDecision // "NONE"),
+    humanReviews:  [.reviews[] |select(.author.login|test($skip)|not)
+                               |select(.author.login != $devin)]|length,
+    humanComments: [.comments[]|select(.author.login|test($skip)|not)
+                               |select(.author.login != $devin)]|length,
+    devinReviews:  [.reviews[] |select(.author.login == $devin)]|length,
+    ciFail: [.statusCheckRollup[]?|select(.conclusion=="FAILURE")]|length }'
 ```
 
-The `$SKIP` half of this is verified against kontrol-ui#3044: it returns
-one human review, tamas-kasa's approval, out of three raw review entries.
+Verified against kontrol-ui#3044: one human review, tamas-kasa's approval,
+out of three raw review entries.
 
 Devin's review **does** fire a banner, on its own `devin_review` signal,
 and the report labels it as the bot rather than folding it in with people.
@@ -131,6 +145,7 @@ fire a banner:
 | `new_comment` | `humanReviews` or `humanComments` went **up** |
 | `devin_review` | `devinReviews` went **up** |
 | `ci_red` | `ciFail` went from `0` to `>0` |
+| `closed` | `state` became `MERGED` or `CLOSED` |
 
 **A signal fires once per sha.** Store every fired signal in the PR's
 `notified` array and never re-fire one already listed there. A PR that has
@@ -187,8 +202,22 @@ In the Quiet section, show how long each PR has been waiting and on whom
 (`reviewRequests`, plus `assignees` if set). That standing list is the
 thing worth glancing at, even though it never triggers a banner.
 
-Then write the updated state to `logs/my-prs-state.json`. Prune entries for
-PRs that are no longer open so the file does not grow forever.
+Then write the updated state to `logs/my-prs-state.json`.
+
+**Only ever prune an entry whose closure you have positively confirmed.**
+Absence from the `gh search prs` result is *not* evidence that a PR closed;
+it is most often index lag. Before dropping any known PR, verify it directly:
+
+```bash
+gh pr view <num> --repo <owner>/<repo> --json state,mergedAt
+```
+
+Prune only on `MERGED` or `CLOSED`, and fire the `closed` signal on that same
+transition so the merge is reported rather than silently vanishing. If the
+verify call itself fails, **keep the entry** and note it in the log. A stale
+entry costs one line in a JSON file; a wrongly pruned one costs the watch,
+because Step 3 never fires on a PR seen for the first time, so a re-seeded PR
+swallows whatever happened while it was missing.
 
 ### Step 5 — Severity + Notification
 
@@ -204,8 +233,9 @@ On `attention` or `failure`, append exactly one block:
 - title: PR activity
 - subtitle: <e.g. "kontrol-ui#3044 approved">
 - body: <the single most important item, ~90 chars. Priority order:
-        changes_requested, then approved, then ci_red, then new_comment,
-        then devin_review last. Name the repo, number, and who acted.>
+        changes_requested, then closed, then approved, then ci_red, then
+        new_comment, then devin_review last. Name the repo, number, and
+        who acted.>
 - sound: default
 ```
 
