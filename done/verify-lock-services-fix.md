@@ -9,7 +9,7 @@ schedule: 2026-09-04T08:30:00+02:00
 next_run: 2026-09-04T08:30:00+02:00
 last_run: null
 created: 2026-09-03T08:45:00+02:00
-status: active
+status: done
 ---
 
 ## Instructions
