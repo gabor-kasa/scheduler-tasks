@@ -21,11 +21,41 @@ any other reclaim command. Report what *should* be cleared and let the
 user decide. A run that deletes something has failed even if it freed
 space.
 
-Design the run to be cheap on healthy days: Steps 1 and 2 are two shell
-commands, and Step 3 exits early when everything is fine. Only reach
-Step 4 when there is something to report.
+Keep healthy runs cheap, but never skip the baseline. Step 1 always
+records one and reads the delta, Steps 2 and 2.5 are three shell commands,
+and Step 3 exits early when everything is fine and nothing unexplained
+moved. Only reach Step 4 when there is something to report.
 
-### Step 1 — Measure real free space
+### Step 1 — Record the baseline, then measure
+
+Run the collector first, on every run, healthy or not:
+
+```bash
+scripts/disk-baseline.sh snapshot
+scripts/disk-baseline.sh diff
+```
+
+`snapshot` appends one measurement block to `logs/disk-baseline.tsv`: used
+and free for every mounted volume, APFS container free, swap, the APFS
+snapshot count, and a per-directory size sweep. `diff` prints what moved
+since the previous run, which directories moved it, and how much of the
+change nothing accounts for.
+
+The `diff` output is the primary material for this task. Quote its
+headline figures and its top movers in the report even when the verdict is
+healthy. A run that says only "30 GB free, all good" is the failure this
+rewrite exists to fix: on 2026-09-12 the machine gave back 13 GB between
+two runs, and no later investigation could say where it came from, because
+no run had recorded a baseline to subtract from.
+
+The volatile sweep (caches, containers, application support) costs about
+35 seconds. Once a day the collector also sweeps the static trees (the
+whole home directory and `/Applications`), which is slower; it decides
+that for itself from a stamp file, so call it plainly and let it choose.
+Pass `--full` only when the diff says the static trees are stale and the
+answer depends on them.
+
+Then take the headline numbers the rest of the steps use:
 
 ```bash
 df -k /System/Volumes/Data | awk 'NR==2{printf "free_gb=%.1f used_gb=%.1f capacity=%s\n", $4/1048576, $3/1048576, $5}'
@@ -42,6 +72,15 @@ under memory pressure:
 ```bash
 sysctl vm.swapusage
 ```
+
+**Watch the whole container, not just the Data volume.** Every APFS volume
+in the container draws on one shared pool of free space, so swap files
+growing on `/System/Volumes/VM` shrink Data's free space without anything
+under `~` changing size. Measured on 2026-09-13: swap total went from
+7168 MB to 9216 MB in a day and the VM volume held 8.6 GB. The collector
+records every volume for this reason. When Data's used size barely moved
+but free space fell, read the other volumes and swap before hunting for a
+directory that grew.
 
 If either command fails, set `Status: failure` / `Severity: failure` and
 log the error. Do not guess at numbers.
@@ -138,11 +177,20 @@ non-Apple agent or a log over 200 MB, the run is **degraded** no matter how
 much space is free — those are defects that will keep consuming disk until
 someone intervenes.
 
-If the verdict is **healthy** *and* Step 2.5 found nothing, stop here.
-Write a one-line `## Report` ("Free: N GB, capacity M%, no user-facing app
-kills in 12h, no crash loops or runaway logs"), set `Status: success` /
-`Severity: ok`, add **no** `## Notification` block, and finish. Do not run
-Step 4 — no point spending tokens or disk I/O on a machine that is fine.
+**Unattributed movement overrides a healthy verdict.** If Step 1's diff
+reports `UNATTRIBUTED` at 5 GB or more in either direction, the run is
+**degraded** whatever the free space says. Something is moving GB-scale
+data that no measured directory accounts for, and catching that is the
+whole point of the baseline. The 5 GB figure is a guess, not a calibrated
+threshold; once a few weeks of baselines exist, tune it to what normal
+drift on this machine actually looks like.
+
+If the verdict is **healthy**, Step 2.5 found nothing, and unattributed
+movement is under 5 GB, stop here. Write a short `## Report` holding the
+one-line summary plus Step 1's headline figures and its top three movers,
+set `Status: success` / `Severity: ok`, add **no** `## Notification` block,
+and finish. Do not run Step 4 — no point spending tokens or disk I/O on a
+machine that is fine.
 
 Otherwise continue. If the *only* finding is from Step 2.5 and free space
 is comfortable, skip the `du` sweep in Step 4 — the consumer breakdown is
@@ -202,6 +250,11 @@ logs, say "no prior baseline" and skip the trend.
 Under `## Report`, include:
 
 - **Verdict** — healthy / degraded / critical, with free GB and capacity %
+- **What moved** — from Step 1's diff: Data volume used, container free,
+  swap, the unattributed figure, and the top movers with their sizes.
+  Include this on every run, healthy or not. It is the only part of the
+  report that can answer "what is eating my free space", so it is not
+  optional and it is not conditional on the verdict.
 - **Swap** — total and used, flagged if free swap is under ~1 GB
 - **Kills** — the user-facing apps killed in the last 12h with counts, or
   "none". Mention Apple background agents only as an aggregate count.
@@ -291,3 +344,38 @@ implying roughly 120 days of continuous looping. Truncating the log would
 have reclaimed the space and left it regenerating at ~6 MB/day forever;
 the fix was to `bootout` the agent first. Note also that this cost CPU and
 battery around the clock, so it is worth reporting even when disk is fine.
+
+### Why the baseline was added (2026-09-13)
+
+Between the 2026-09-12 09:00 and 17:02 runs the machine went from 19.8 GB
+free to 29.7 GB and `used` fell 12.9 GB. Nothing could explain it
+afterwards. Ruled out, each one measured:
+
+- None of the six reclaim candidates the runs kept recommending had been
+  cleared. Homebrew cache, DerivedData, Spotify, VS Code ShipIt, Codex and
+  TypeScript were byte-identical a day later, so nobody ran the cleanups.
+- No shell commands ran in that window. `~/.histfile` has extended history
+  on and holds nothing between Sep 11 19:08 and Sep 12 20:40.
+- No Claude Code session ran either, apart from the two scheduled runs.
+- Nothing was trashed. `~/.Trash` was 0 B with an mtime from the day before.
+- The two `cache_delete` purge attempts at 14:46 and 15:06 freed nothing.
+  Purgeable went from 4,245,790,720 to 4,245,819,392 bytes, up 28 KB, and
+  the daemon logged `no purges queued`.
+- Time Machine could not have thinned snapshots, because Time Machine is
+  broken here. Its only destination is named "Macintosh HD" with
+  `Kind: Local`, and `backupd` resolves it to `/` then fails with `Alias
+  resolved to a volume mounted at '/' which is an APFS volume but not a
+  Time Machine volume`. Worth fixing on its own account: this Mac has no
+  working backup.
+
+So 12.9 GB moved and the cause is still unknown. That is a reporting
+defect rather than a mystery. The task recorded per-directory sizes only
+once it was already degraded, so every healthy run left nothing to
+subtract from. Hence the Step 1 baseline, and hence `UNATTRIBUTED`, which
+exists so the same event raises its hand next time instead of passing as a
+quiet healthy run.
+
+One more caveat learned the same day: `free + used` from `df` on the Data
+volume is not constant (431.9, then 428.9, then 431.9 GB across three
+runs). The APFS container's accounting shifts by a couple of GB on its
+own, so treat any single-volume delta under ~3 GB as noise.
