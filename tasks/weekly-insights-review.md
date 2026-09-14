@@ -118,6 +118,17 @@ Rules:
   notification. A quiet week is an honest result — do **not** manufacture a
   finding to fill the slot.
 - Fewer-but-grounded over padding. One strong item beats three weak ones.
+- **Never re-raise a declined pick.** The *Declined picks* list below is
+  authoritative: those capabilities are unused **by choice**. Do not surface
+  them, do not re-raise them "with a sharper hook", and do not treat their
+  absence from Step 1 as evidence of anything. If new facts genuinely change
+  the case, note it in one line under *What you already use* and leave it there.
+- **Unused twice is a signal, not a licence to escalate.** If a pick has been
+  raised in two consecutive reports with no adoption and no stated reason from
+  Gabor, stop raising it: record the drop once and move on. A capability he has
+  seen twice and not taken up is a decision he has made, not a message he
+  missed. Five weeks of "still unadopted, escalating with a sharper count" is
+  the failure mode this rule exists to prevent.
 
 ### Step 5 — Write the log
 
@@ -165,6 +176,21 @@ On `Severity: attention`, append:
 ```
 
 Skip the notification on `ok` and `failure`.
+
+### Declined picks — do not re-raise
+
+Capabilities Gabor has considered and deliberately rejected. Here, unused means
+*decided*, not missed.
+
+- **claude.ai Atlassian MCP connector** (declined 2026-09-14). The connector
+  pollutes the context window. The `shared-kasa-jira` skill reaches the same
+  Jira API with a far smaller footprint and works fine. The repeated
+  `authenticate` calls in the transcripts are agents auto-invoking a connector
+  that is meant to stay unauthorized — that is the intended state, not a
+  blocked need, and counting those attempts is not evidence of demand.
+
+When Gabor declines a pick, add it here with the date and his reason, so the
+next run inherits the decision instead of rediscovering it.
 
 ## Context
 
