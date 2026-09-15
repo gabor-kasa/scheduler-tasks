@@ -48,6 +48,37 @@ rewrite exists to fix: on 2026-09-12 the machine gave back 13 GB between
 two runs, and no later investigation could say where it came from, because
 no run had recorded a baseline to subtract from.
 
+Three rules for reading that output. Each one is here because the
+2026-09-15 run broke it and produced a report that could not say where the
+space went.
+
+- **The container ledger is the answer to "where did the free space
+  go".** The diff prints it under `where the free space went`: every
+  volume sharing the APFS free pool, what each one gained, and the
+  residual against the change in free space. It balances to roughly zero,
+  so it is a complete account rather than a guess. Quote it before
+  anything else. `UNATTRIBUTED` is a much smaller claim — it is the *Data
+  volume's* residue alone. Swap files live on `/System/Volumes/VM` and
+  never touch Data, so a report that discusses only Data cannot explain a
+  loss that swap caused. On 2026-09-15 the ledger read Data +5.45 GB and
+  VM +1.00 GB against -6.45 GB of free space, residual 0.00.
+- **"not measured" is not "unchanged".** When a key was never collected
+  the diff prints `not measured` instead of a delta. Never restate that
+  as stable, flat, or unchanged. Say the collector did not record it and
+  set `Severity: attention`: the guard is half blind until someone fixes
+  it. If Step 1's own `sysctl` returned a number the collector missed,
+  report the direct reading and say the two disagree.
+- **Read both windows.** On a full-sweep run the diff prints a second
+  block covering a longer window (since the previous full sweep) that
+  includes the static trees — `~/Documents`, `~/Downloads`, `~/worktrees`,
+  `/Applications`. Multi-GB movement usually lives there, while the
+  run-to-run block sees only caches and containers and dumps everything
+  else into `UNATTRIBUTED`. Report movers from both blocks, labelled with
+  the window each came from. The 2026-09-15 run printed both and quoted
+  only the first, so it carried 2.86 GB of unattributed movement while
+  the second block on the same screen named `~/Documents` +1.06 GB and
+  `~/Downloads` +0.65 GB.
+
 The volatile sweep (caches, containers, application support) costs about
 35 seconds. Once a day the collector also sweeps the static trees (the
 whole home directory and `/Applications`), which is slower; it decides
@@ -250,11 +281,16 @@ logs, say "no prior baseline" and skip the trend.
 Under `## Report`, include:
 
 - **Verdict** — healthy / degraded / critical, with free GB and capacity %
-- **What moved** — from Step 1's diff: Data volume used, container free,
-  swap, the unattributed figure, and the top movers with their sizes.
-  Include this on every run, healthy or not. It is the only part of the
-  report that can answer "what is eating my free space", so it is not
-  optional and it is not conditional on the verdict.
+- **Where the free space went** — the container ledger from Step 1's
+  diff, quoted as it printed: each volume's gain, the total, and the
+  residual against the change in free space. This is the question the task
+  exists to answer, so it comes first and appears on every run, healthy or
+  not. Say "swap" in words when `/System/Volumes/VM` moved.
+- **What moved** — Data volume used, container free, swap, the
+  unattributed figure, and the top movers with their sizes, from **both**
+  diff windows when the run was a full sweep, each labelled with its
+  window. Anything the diff printed as `not measured` is reported as not
+  measured, never as zero or unchanged.
 - **Swap** — total and used, flagged if free swap is under ~1 GB
 - **Kills** — the user-facing apps killed in the last 12h with counts, or
   "none". Mention Apple background agents only as an aggregate count.
@@ -266,12 +302,22 @@ Under `## Report`, include:
 - **Trend** — free space across the last 3 runs, or "no prior baseline"
 - **Top consumers** — the `du` results, largest first
 - **Recommended reclaim** — concrete candidates with realistic sizes,
-  cheapest-and-safest first. Never present a command as already run.
+  cheapest-and-safest first. Never present a command as already run. Rank
+  these against the ledger and the movers, not against absolute size. A
+  directory that gained 4 GB since yesterday is the finding; a 3 GB cache
+  that has been 3 GB for a month is background. When the growth is not
+  reclaimable — a system agent's container, swap — say that plainly rather
+  than falling back to the standing hogs. "The 4 GB went to
+  `com.apple.mediaanalysisd`, which you cannot safely delete, and here is
+  what you can clear instead" is a useful answer. "Clear your Homebrew
+  cache", offered on a run where Homebrew did not move, is not.
 
 Set `Status: success` when the check completed, even if the verdict is
 critical — `Status`/`Severity: failure` is for *the check itself* failing
 (a command errored, output unparseable), not for the disk being full. A
-full disk is `Severity: attention`.
+full disk is `Severity: attention`. The 2026-09-15 run wrote
+`Status: success` together with `Severity: failure`; that pairing is
+always wrong. If the check ran, the severity is `ok` or `attention`.
 
 Append a `## Notification` block **only** when the verdict is degraded or
 critical:
@@ -379,3 +425,37 @@ One more caveat learned the same day: `free + used` from `df` on the Data
 volume is not constant (431.9, then 428.9, then 431.9 GB across three
 runs). The APFS container's accounting shifts by a couple of GB on its
 own, so treat any single-volume delta under ~3 GB as noise.
+
+### Why the ledger was added (2026-09-15)
+
+The baseline was in place and the 09:00 run still could not say where
+6.5 GB had gone. Three separate defects, all measured afterwards:
+
+- **The collector lost two of its five context measurements on
+  2026-09-13.** `container.free` and `swap.*` come from `diskutil` and
+  `sysctl`, both in `/usr/sbin`, which is not on the PATH the scheduler
+  gives `claude -p`. Both exited 127 into `2>/dev/null`. Every block from
+  `2026-09-14T09:00` onward is missing those keys. The script already used
+  absolute paths for `log` and `tmutil` for this exact reason and missed
+  these two.
+- **The diff scored a missing key as zero.** So the runs of 09-14 17:00,
+  09-15 09:00 reported "Container free +0.00 GB (stable)" and "Swap used
+  +0.00 GB (no change)" a few lines above their own direct `sysctl`
+  output showing swap total climbing 8192 → 10240 → 11264 MB. The
+  09-14 09:00 run got the mirror image, a phantom "-20.35 GB", from
+  differencing a block that had the key against one that did not. Missing
+  keys now print `not measured`.
+- **The ledger only balanced the Data volume.** Free space is a
+  *container* property shared by every volume in it, so `df` reports the
+  same free figure for `/`, `/System/Volumes/Data`, `VM`, `Preboot` and
+  `Update`. Swap grows on `VM` and never appears in a Data-only account.
+  Summing the used-delta of every volume in that container reconciles the
+  loss exactly: over 09-14 17:00 → 09-15 09:00, Data +5.45 GB and VM
+  +1.00 GB against -6.45 GB free, residual 0.00. Over the full-sweep
+  window 09-13 18:17 → 09-15 09:00, Data +3.52 and VM +3.00 against
+  -6.53, residual 0.00.
+
+So the honest answer to "where did the overnight 6.5 GB go" was 5.45 GB
+onto the Data volume, of which 3.97 GB is `com.apple.mediaanalysisd`'s
+container, plus 1.00 GB of new swap file. None of that is in the report
+the run actually wrote.

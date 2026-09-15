@@ -53,14 +53,22 @@ snapshot() {
 
 		# Container free is the number that governs whether macOS starts
 		# killing apps. It is not the same as the Data volume's free.
-		cfree=$(diskutil info -plist /System/Volumes/Data 2>/dev/null |
-			plutil -extract APFSContainerFree raw - 2>/dev/null)
+		#
+		# Absolute paths, like /usr/bin/tmutil and /usr/bin/log below. The
+		# scheduler spawns claude -p without /usr/sbin on PATH, so bare
+		# `diskutil` and `sysctl` exit 127 and their 2>/dev/null swallows it.
+		# Between 2026-09-13 and 2026-09-15 that silently dropped every
+		# container.free and swap.* measurement, and the diff then reported
+		# the missing keys as "+0.00 GB" — three runs called the container
+		# stable while swap grew from 8 to 11 GB.
+		cfree=$(/usr/sbin/diskutil info -plist /System/Volumes/Data 2>/dev/null |
+			/usr/bin/plutil -extract APFSContainerFree raw - 2>/dev/null)
 		case "$cfree" in
 		'' | *[!0-9]*) : ;;
 		*) printf '%s\tcontainer.free\t%s\n' "$run_ts" "$cfree" ;;
 		esac
 
-		sysctl vm.swapusage 2>/dev/null | awk -v r="$run_ts" '
+		/usr/sbin/sysctl vm.swapusage 2>/dev/null | awk -v r="$run_ts" '
 			{
 				for (i = 1; i <= NF; i++) {
 					if ($i == "total") tot = $(i + 2)
@@ -111,6 +119,15 @@ snapshot() {
 # diff_pair <ts_old> <ts_new> <key regex> <heading>
 diff_pair() {
 	awk -F'\t' -v a="$1" -v b="$2" -v kre="$3" -v gib="$GIB" '
+		function have(k) { return (k in o) && (k in n) }
+		function ctxline(label, k) {
+			# A key missing from either block was never measured. Printing a
+			# "+0.00 GB" delta for it reads as "nothing changed", and that is
+			# how three runs in a row called the container and swap stable
+			# while swap was growing from 8 GB to 11 GB.
+			if (!have(k)) { printf "HEAD\t%s\tnot measured\n", label; return }
+			printf "HEAD\t%s\t%+.2f GB\n", label, (n[k] - o[k]) / gib
+		}
 		$1 == a { o[$2] = $3; seen[$2] = 1 }
 		$1 == b { n[$2] = $3; seen[$2] = 1 }
 		END {
@@ -123,23 +140,65 @@ diff_pair() {
 					if (ad >= 10485760) {
 						printf "MOVER\t%d\t%.2f\t%s\n", ad, d / gib, substr(k, 5)
 					}
-				} else {
-					ctx[k] = (k in n ? n[k] : 0) - (k in o ? o[k] : 0)
 				}
 			}
-			target = ctx["vol.used:/System/Volumes/Data"]
-			printf "HEAD\tData volume used\t%+.2f GB\n", target / gib
-			printf "HEAD\tData volume free\t%+.2f GB\n", ctx["vol.free:/System/Volumes/Data"] / gib
-			printf "HEAD\tContainer free\t%+.2f GB\n", ctx["container.free"] / gib
-			printf "HEAD\tSwap used\t%+.2f GB\n", ctx["swap.used"] / gib
-			printf "HEAD\tVM volume used\t%+.2f GB\n", ctx["vol.used:/System/Volumes/VM"] / gib
-			printf "HEAD\tSnapshots\t%+d\n", ctx["snapshots.count"]
+
+			dused = "vol.used:/System/Volumes/Data"
+			dfree = "vol.free:/System/Volumes/Data"
+			target = have(dused) ? n[dused] - o[dused] : 0
+
+			ctxline("Data volume used", dused)
+			ctxline("Data volume free", dfree)
+			ctxline("Container free", "container.free")
+			ctxline("Swap used", "swap.used")
+			ctxline("VM volume used", "vol.used:/System/Volumes/VM")
+			if (have("snapshots.count"))
+				printf "HEAD\tSnapshots\t%+d\n", n["snapshots.count"] - o["snapshots.count"]
+			else
+				printf "HEAD\tSnapshots\tnot measured\n"
 			printf "HEAD\tExplained by du\t%+.2f GB\n", explained / gib
-			printf "HEAD\tUNATTRIBUTED\t%+.2f GB\n", (target - explained) / gib
+			printf "HEAD\tUNATTRIBUTED (Data)\t%+.2f GB\n", (target - explained) / gib
+
+			# Container ledger: where the free space actually went.
+			#
+			# Every APFS volume in one container draws on a single free pool,
+			# so df reports the same free figure for each of them, which is how
+			# a volume is recognised as sharing this container here. What the
+			# volumes gained must equal what the pool lost, so this balances to
+			# ~0 and names the split. Swap files live on /System/Volumes/VM and
+			# never touch Data, so a Data-only ledger cannot explain a loss
+			# that swap caused, which is most of what these runs kept missing.
+			if (have(dfree)) {
+				for (k in seen) {
+					if (k !~ /^vol\.used:/) continue
+					mnt = substr(k, 10)
+					if (!have(k) || !have("vol.free:" mnt)) continue
+					if (n["vol.free:" mnt] != n[dfree]) continue
+					d = n[k] - o[k]
+					ledger += d
+					if (d >= 10485760 || d <= -10485760)
+						printf "LEDGER\t%.2f\t%s\n", d / gib, mnt
+				}
+				printf "LEDGERSUM\t%.2f\t%.2f\t%.2f\n", ledger / gib, (n[dfree] - o[dfree]) / gib, (ledger + n[dfree] - o[dfree]) / gib
+			}
 		}' "$TSV" >"$TMPF"
 
 	echo "$4"
-	grep '^HEAD' "$TMPF" | cut -f2- | awk -F'\t' '{ printf "  %-18s %s\n", $1, $2 }'
+	grep '^HEAD' "$TMPF" | cut -f2- | awk -F'\t' '{ printf "  %-20s %s\n", $1, $2 }'
+
+	if grep -q '^LEDGERSUM' "$TMPF"; then
+		echo
+		echo "  where the free space went (container ledger, balances to ~0):"
+		grep "^LEDGER$(printf '\t')" "$TMPF" | sort -t"$(printf '\t')" -k2,2nr |
+			awk -F'\t' '{
+				name = $3
+				if (name == "/System/Volumes/VM") name = name "   <- swap files, not temp files"
+				printf "    %+8.2f  %s\n", $2, name
+			}'
+		grep '^LEDGERSUM' "$TMPF" |
+			awk -F'\t' '{ printf "    %+8.2f  = total volume growth, against %+.2f GB of free space (residual %+.2f)\n", $2, $3, $4 }'
+	fi
+
 	movers=$(grep -c '^MOVER' "$TMPF" || true)
 	if [ "${movers:-0}" -gt 0 ]; then
 		echo
