@@ -16,10 +16,13 @@ Check whether this Mac is close enough to full that macOS has started
 silently killing applications, and warn before that happens again.
 
 **This task is strictly read-only.** Never delete, move, truncate, or
-modify any file, and never run `rm`, `brew cleanup`, `simctl delete`, or
-any other reclaim command. Report what *should* be cleared and let the
-user decide. A run that deletes something has failed even if it freed
-space.
+modify any file, and never run `rm`, `brew cleanup`, `simctl delete`,
+`git worktree remove`, `git branch -d`, or any other reclaim command.
+Report what *should* be cleared and let the user decide. A run that
+deletes something has failed even if it freed space. `git worktree
+remove` is on that list because Step 4 now identifies dead worktrees by
+name and prints the command to remove them — printing it is the job,
+running it is not.
 
 Keep healthy runs cheap, but never skip the baseline. Step 1 always
 records one and reads the delta, Steps 2 and 2.5 are three shell commands,
@@ -78,13 +81,30 @@ space went.
   only the first, so it carried 2.86 GB of unattributed movement while
   the second block on the same screen named `~/Documents` +1.06 GB and
   `~/Downloads` +0.65 GB.
+- **A named tree is not a named cause.** The full-sweep block reports
+  `~/worktrees` and `~/Documents` as one line each, because that is the
+  depth `du -xkd1 $HOME` works at. "`~/worktrees` +1.78 GB" is a
+  direction, not a finding, and the user cannot act on it. The collector
+  now itemises those two trees under a separate `development trees,
+  itemised` heading in the same diff output. When the tree moved, quote
+  the itemised lines, not just the parent. Those lines are detail only:
+  their parent already counts the same bytes, so they are deliberately
+  left out of `Explained by du` and `UNATTRIBUTED`. Never add them in.
 
 The volatile sweep (caches, containers, application support) costs about
 35 seconds. Once a day the collector also sweeps the static trees (the
-whole home directory and `/Applications`), which is slower; it decides
-that for itself from a stamp file, so call it plainly and let it choose.
-Pass `--full` only when the diff says the static trees are stale and the
-answer depends on them.
+whole home directory, `/Applications`, and one level inside `~/worktrees`
+and `~/Documents/workspace`), which is much slower; it decides that for
+itself from a stamp file, so call it plainly and let it choose. Pass
+`--full` only when the diff says the static trees are stale and the answer
+depends on them.
+
+Budget for that full sweep honestly: measured 2026-09-17, the home walk
+alone is ~2m30s and the itemised development trees add ~1m20s, both with a
+warm cache, and the same sweep took **9m57s** cold on a machine with
+0.7 GB of free swap. It is I/O bound, not CPU bound, so it gets slower
+exactly when the machine is in the state this task exists to catch. A full
+sweep taking several minutes is normal and is not a reason to skip it.
 
 Then take the headline numbers the rest of the steps use:
 
@@ -239,6 +259,62 @@ du -sh ~/Library/Containers/* 2>/dev/null | sort -rh | head -5
 du -sh ~/Library/Developer/Xcode/DerivedData /Library/Developer/CoreSimulator 2>/dev/null
 ```
 
+**Then the development trees, every degraded or critical run.** The block
+above covers `~/Library` and nothing else, so on its own it cannot see the
+largest reclaimable pool on this machine. Measured 2026-09-17: 21.3 GB in
+`~/worktrees` and 23.0 GB of `node_modules` under `~/Documents/workspace`,
+against a "top consumers" list whose headline recommendation was a 3.2 GB
+Xcode cache.
+
+```bash
+du -sk ~/worktrees/* 2>/dev/null | sort -rn | head -10 | awk '{printf "%.2f GB\t%s\n", $1/1048576, $2}'
+du -sh ~/worktrees ~/Documents/workspace 2>/dev/null
+```
+
+Most of that mass is `node_modules`, which is reinstallable rather than
+lost, so it is worth separating from real data when you size the
+opportunity:
+
+```bash
+find ~/worktrees -maxdepth 3 -type d -name node_modules -prune 2>/dev/null \
+  | while read -r d; do du -sk "$d"; done \
+  | awk '{s+=$1} END{printf "node_modules in worktrees: %.2f GB across %d dirs\n", s/1048576, NR}'
+```
+
+Then name the **dead** worktrees: the ones whose PR is already merged or
+closed, where the code is on master and the checkout is pure waste.
+
+```bash
+for w in ~/worktrees/*/; do
+  br=$(git -C "$w" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  up=$(git -C "$w" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo NONE)
+  dirty=$(git -C "$w" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$up" = NONE ]; then unpushed=NO-UPSTREAM; else unpushed=$(git -C "$w" rev-list --count "$up"..HEAD 2>/dev/null); fi
+  pr=$(cd "$w" && gh pr list --head "$br" --state all --json number,state --limit 1 \
+       --jq '.[0] | "#\(.number) \(.state)"' 2>/dev/null)
+  printf '%s\t%s\t%s\tdirty=%s\tunpushed=%s\n' \
+    "$(du -sk "$w" | awk '{printf "%.2f GB", $1/1048576}')" "$(basename "$w")" "${pr:-no-PR}" "$dirty" "$unpushed"
+done
+```
+
+Report a worktree as reclaimable **only** when all three hold: its PR is
+`MERGED` or `CLOSED`, `dirty=0`, and `unpushed=0`. Anything else stays off
+the list, and `NO-UPSTREAM` is the one to be strict about — it means local
+commits that exist nowhere else, so however big it is, it is not
+reclaimable. Give the total GB of the reclaimable set and the command,
+unrun:
+
+```
+git -C ~/worktrees/<name> worktree remove ~/worktrees/<name>
+```
+
+Two notes so the report does not overclaim. Stashes are stored once per
+repository, not per worktree, so several worktrees of one repo all report
+the same stash count and removing any of them loses none of it. And `gh`
+may be unauthenticated or rate-limited in a scheduled run; if the PR state
+comes back empty for every worktree, say the PR states could not be read
+and report sizes only, rather than treating "no PR" as "dead".
+
 Known traps when estimating how much a candidate would actually free. Each
 of these produced a wrong number the first time this was investigated, so
 check them before quoting a figure:
@@ -291,7 +367,13 @@ Under `## Report`, include:
   diff windows when the run was a full sweep, each labelled with its
   window. Anything the diff printed as `not measured` is reported as not
   measured, never as zero or unchanged.
-- **Swap** — total and used, flagged if free swap is under ~1 GB
+- **Swap** — total and used, flagged if free swap is under ~1 GB. When it
+  is under 1 GB, say in the same breath that clearing files will not fix
+  it: swap is held by a running process, and it comes back only when
+  something quits or the machine restarts. Name it as the binding
+  constraint and point at memory, not at a cache list. On 2026-09-17 free
+  space rose 9.3 GB across a cleanup while swap climbed to 9.5 GB used
+  with 0.7 GB free, and the kill risk did not improve at all.
 - **Kills** — the user-facing apps killed in the last 12h with counts, or
   "none". Mention Apple background agents only as an aggregate count.
 - **Defects** — crash-looping agents and runaway logs from Step 2.5, or
@@ -301,6 +383,13 @@ Under `## Report`, include:
   the last few lines.
 - **Trend** — free space across the last 3 runs, or "no prior baseline"
 - **Top consumers** — the `du` results, largest first
+- **Development footprint** — `~/worktrees` and `~/Documents/workspace`
+  totals, how much of each is `node_modules`, and the dead-worktree table
+  from Step 4 with a GB total for the reclaimable set. This bullet is
+  required on every degraded or critical run. It is the one the task kept
+  missing: for a month of runs the largest safely reclaimable pool on the
+  machine never appeared in a single report, because no step measured
+  below `~/worktrees` and the `du` block only looked at `~/Library`.
 - **Recommended reclaim** — concrete candidates with realistic sizes,
   cheapest-and-safest first. Never present a command as already run. Rank
   these against the ledger and the movers, not against absolute size. A
@@ -459,3 +548,53 @@ So the honest answer to "where did the overnight 6.5 GB go" was 5.45 GB
 onto the Data volume, of which 3.97 GB is `com.apple.mediaanalysisd`'s
 container, plus 1.00 GB of new swap file. None of that is in the report
 the run actually wrote.
+
+### Why the development trees are itemised (2026-09-17)
+
+The 09:00 run died on a usage limit and wrote no measurement, so the first
+reading of the day came by hand at 11.30 GB free, 98% capacity — lower
+than anything in the ledger. Working out where it went exposed a blind
+spot that had been there since the task was written.
+
+`~/worktrees` held **21.29 GB across 33 worktrees**, of which 20.37 GB was
+`node_modules`. Twenty-one of those worktrees had a merged or closed PR, a
+clean working tree, and nothing unpushed: **11.55 GB that could be deleted
+without losing a line of code**. Removing them, plus 4.49 GB of
+`com.apple.e5rt.e5bundlecache`, took free space from 11.30 GB to 20.60 GB
+in one sitting.
+
+Not one run had ever mentioned it. The reason is structural, not a lapse
+of judgement by any run:
+
+- Step 4's `du` block covered `~/Library/{Application Support,Caches,
+  Containers}`, DerivedData and CoreSimulator. `~/worktrees` and
+  `~/Documents/workspace` were not in it, so "Top consumers" could not
+  contain them at any size.
+- The collector's static sweep is `du -xkd1 $HOME`, one line per top-level
+  directory. The ledger could say `~/worktrees` grew 1.78 GB and could
+  never say which worktree or that it was `node_modules`.
+
+So the runs recommended what they could see. On 2026-09-16 17:00 the
+headline advice was to clear a 3.2 GB Xcode cache to cross back into the
+healthy band, while 11.55 GB of dead checkouts sat unmentioned a directory
+away. The Context section of this very file had said `~/worktrees` was
+25 GB of `node_modules` since 2026-08-11, in prose, and no step ever
+measured it. A fact in the background notes that no step reads is not a
+fact the task knows.
+
+Two things that make the new check safe to act on, both verified that day:
+
+- **Stashes are per repository, not per worktree.** All four
+  `code-setting-service` worktrees reported the same 19 stashes, all three
+  `smartthings-sync` ones the same 5. `git worktree remove` does not touch
+  them.
+- **A branch with no upstream is the one to protect.** Five of the
+  surviving worktrees had no upstream and commits ahead of master, meaning
+  work that exists on no remote. Size is not the test; reachability is.
+
+The mediaanalysisd leak also repeated exactly as the ledger predicted:
+0.48 GB on 09-14 17:00, 4.39 GB by 09-15 09:00, self-cleared to 0.09 GB by
+17:00, then 4.58 GB again by 09-17. It is a recurring overnight refill of
+`Data/Library/Caches/com.apple.mediaanalysisd/com.apple.e5rt.e5bundlecache`,
+it is safe to delete, and it comes back. Report it as a recurring 4 GB
+tax rather than a fresh discovery each time.

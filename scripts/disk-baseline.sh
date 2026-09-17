@@ -20,9 +20,17 @@
 #   vol.* container.* swap.* snapshots.*   context, every run
 #   duA.<path>                             volatile set, every run (~35s)
 #   duB.<path>                             static set, once a day (~3min)
+#   duC.<path>                             detail inside two duB trees, daily
 #   sweep.full                             marks a block that carries duB keys
 #
 # So a run-to-run diff compares duA only, and a full-sweep diff compares both.
+#
+# duC is reporting detail, not accounting. duB carries ~/worktrees and
+# ~/Documents as one line each, which is the depth du -xkd1 works at, so no run
+# could ever name the worktree that grew. duC itemises those two trees. Its
+# bytes are already counted by their duB parent, so it is deliberately excluded
+# from the explained/UNATTRIBUTED sum — including both would double-count every
+# one of them.
 
 set -u
 
@@ -107,6 +115,13 @@ snapshot() {
 				awk -v r="$run_ts" -F'\t' '$2 != ENVIRON["HOME"] { printf "%s\tduB.%s\t%.0f\n", r, $2, $1 * 1024 }'
 			du -sk /Applications/* 2>/dev/null |
 				awk -v r="$run_ts" -F'\t' '{ printf "%s\tduB.%s\t%.0f\n", r, $2, $1 * 1024 }'
+
+			# One level inside the two development trees. See the duC note at
+			# the top: detail only, never added to the explained sum.
+			# Costs ~1m20s warm on top of the ~2m30s home walk (2026-09-17).
+			du -sk "$HOME/worktrees/"* "$HOME/Documents/workspace/"* 2>/dev/null |
+				awk -v r="$run_ts" -F'\t' '{ printf "%s\tduC.%s\t%.0f\n", r, $2, $1 * 1024 }'
+
 			printf '%s\tsweep.full\t1\n' "$run_ts"
 		fi
 	} >>"$TSV"
@@ -116,9 +131,9 @@ snapshot() {
 	echo "baseline written: $run_ts (full sweep: $full) -> $TSV"
 }
 
-# diff_pair <ts_old> <ts_new> <key regex> <heading>
+# diff_pair <ts_old> <ts_new> <key regex> <detail regex> <heading>
 diff_pair() {
-	awk -F'\t' -v a="$1" -v b="$2" -v kre="$3" -v gib="$GIB" '
+	awk -F'\t' -v a="$1" -v b="$2" -v kre="$3" -v dre="$4" -v gib="$GIB" '
 		function have(k) { return (k in o) && (k in n) }
 		function ctxline(label, k) {
 			# A key missing from either block was never measured. Printing a
@@ -139,6 +154,17 @@ diff_pair() {
 					# 10 MB floor, so the list is movement and not noise
 					if (ad >= 10485760) {
 						printf "MOVER\t%d\t%.2f\t%s\n", ad, d / gib, substr(k, 5)
+					}
+				} else if (dre != "" && k ~ dre && have(k)) {
+					# Detail keys: reported, never summed into explained. The
+					# have(k) test also stops the first sweep after duC was
+					# added from printing every worktree as a brand-new
+					# multi-GB "grower" against a block that never measured
+					# them at all.
+					d = n[k] - o[k]
+					ad = (d < 0 ? -d : d)
+					if (ad >= 10485760) {
+						printf "DETAIL\t%d\t%.2f\t%s\n", ad, d / gib, substr(k, 5)
 					}
 				}
 			}
@@ -183,7 +209,7 @@ diff_pair() {
 			}
 		}' "$TSV" >"$TMPF"
 
-	echo "$4"
+	echo "$5"
 	grep '^HEAD' "$TMPF" | cut -f2- | awk -F'\t' '{ printf "  %-20s %s\n", $1, $2 }'
 
 	if grep -q '^LEDGERSUM' "$TMPF"; then
@@ -204,6 +230,15 @@ diff_pair() {
 		echo
 		echo "  top movers (GB, + grew / - shrank):"
 		grep '^MOVER' "$TMPF" | sort -t"$(printf '\t')" -k2,2nr | head -15 |
+			awk -F'\t' '{ printf "    %+8.2f  %s\n", $3, $4 }'
+	fi
+
+	details=$(grep -c '^DETAIL' "$TMPF" || true)
+	if [ "${details:-0}" -gt 0 ]; then
+		echo
+		echo "  development trees, itemised (detail only — already counted in"
+		echo "  their parent above, so do not add these to the totals):"
+		grep '^DETAIL' "$TMPF" | sort -t"$(printf '\t')" -k2,2nr | head -15 |
 			awk -F'\t' '{ printf "    %+8.2f  %s\n", $3, $4 }'
 	fi
 	echo
@@ -228,7 +263,9 @@ diff_last_two() {
 
 	ts_old=$(echo "$ts_list" | tail -2 | head -1)
 	ts_new=$(echo "$ts_list" | tail -1)
-	diff_pair "$ts_old" "$ts_new" '^duA\.' "since the previous run: $ts_old -> $ts_new"
+	# No detail regex: duC is collected on full sweeps only, so a run-to-run
+	# pair never has it in both blocks.
+	diff_pair "$ts_old" "$ts_new" '^duA\.' '' "since the previous run: $ts_old -> $ts_new"
 
 	echo "  (volatile set only. Movement inside the static trees, which are"
 	echo "  swept once a day, lands in UNATTRIBUTED until the next full sweep.)"
@@ -239,7 +276,7 @@ diff_last_two() {
 	if [ "$full_count" -ge 2 ]; then
 		f_old=$(echo "$full_list" | tail -2 | head -1)
 		f_new=$(echo "$full_list" | tail -1)
-		diff_pair "$f_old" "$f_new" '^du[AB]\.' "since the previous full sweep: $f_old -> $f_new"
+		diff_pair "$f_old" "$f_new" '^du[AB]\.' '^duC\.' "since the previous full sweep: $f_old -> $f_new"
 	else
 		echo "since the previous full sweep: not yet, only $full_count full sweep on record"
 		echo
