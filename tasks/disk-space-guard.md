@@ -31,12 +31,42 @@ moved. Only reach Step 4 when there is something to report.
 
 ### Step 1 — Record the baseline, then measure
 
-Run the collector first, on every run, healthy or not:
+Run the collector first, on every run, healthy or not.
+
+**Give the snapshot an explicit 10-minute Bash timeout.** It takes ~45s for
+a volatile sweep and ~4min for a full one, so the default 30s always
+expires. When it does, the harness moves the process to the background and
+hands you a task ID, and the run then has no idea whether the sweep
+finished. On 2026-09-17 17:00 that happened, the backgrounded process died
+partway through, and the block it left behind held 213 of 1297 keys. The
+next run read that block as authoritative and reported +6.09 GB of Docker
+growth on a machine where Docker had not moved a byte in two days.
 
 ```bash
+# Bash tool call, timeout: 600000
 scripts/disk-baseline.sh snapshot
+```
+```bash
 scripts/disk-baseline.sh diff
 ```
+
+Two rules about the snapshot, both paid for by that run:
+
+- **Never poll `ps` to decide whether the sweep finished.** The 2026-09-17
+  run did, matched nothing, and concluded "Snapshot completed after 10
+  seconds" about a process that had just been killed mid-sweep. An absent
+  process means finished *or* dead, and those need opposite handling.
+- **Confirm the block landed before trusting the diff.** `snapshot` now
+  writes `block.complete` as its last key and appends nothing at all if it
+  did not get there, so the check is exact:
+
+  ```bash
+  tail -1 logs/disk-baseline.tsv   # must read <ts><TAB>block.complete<TAB>1
+  ```
+
+  If the last line is not `block.complete`, the snapshot aborted. Say so in
+  the report, set `Severity: attention`, and treat every figure in the diff
+  as covering an unknown window.
 
 `snapshot` appends one measurement block to `logs/disk-baseline.tsv`: used
 and free for every mounted volume, APFS container free, swap, the APFS
@@ -51,7 +81,7 @@ rewrite exists to fix: on 2026-09-12 the machine gave back 13 GB between
 two runs, and no later investigation could say where it came from, because
 no run had recorded a baseline to subtract from.
 
-Three rules for reading that output. Each one is here because the
+Four rules for reading that output. Each one is here because the
 2026-09-15 run broke it and produced a report that could not say where the
 space went.
 
@@ -65,6 +95,19 @@ space went.
   never touch Data, so a report that discusses only Data cannot explain a
   loss that swap caused. On 2026-09-15 the ledger read Data +5.45 GB and
   VM +1.00 GB against -6.45 GB of free space, residual 0.00.
+- **`!! TRUNCATED BASELINE !!` voids the mover list.** The diff prints this
+  banner when one of the two blocks died mid-sweep. The movers under it are
+  not growth: a directory measured in only one block is now excluded from
+  the list entirely, but the window it covers is still unknown. When you
+  see the banner, report it as a defect in Step 2.5, set `Severity:
+  attention`, and quote the `Measured one side only` line so the report
+  says how blind it was. Name the cause as a failed collector run, not as
+  disk consumption. Read `Keys compared` on every run, banner or not: it is
+  the coverage of the diff, and a diff over 200 keys is not a diff over
+  1300. Check the span in the heading too: it names the two timestamps
+  actually compared, and this task runs at 09:00 and 17:00, so a span much
+  wider than 8 or 16 hours means a scheduled run recorded nothing at all.
+  That is a defect in its own right, not a quiet night.
 - **"not measured" is not "unchanged".** When a key was never collected
   the diff prints `not measured` instead of a delta. Never restate that
   as stable, flat, or unchanged. Say the collector did not record it and

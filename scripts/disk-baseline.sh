@@ -47,6 +47,25 @@ snapshot() {
 	[ -f "$STAMP" ] || full=1
 	[ -f "$STAMP" ] && [ -z "$(find "$STAMP" -mtime -1 2>/dev/null)" ] && full=1
 
+	# Measure into a temp file and append the block only once it is whole.
+	#
+	# The sweep below takes 35s volatile / ~4min full, and it used to append
+	# straight to the TSV, so anything that killed the process mid-sweep left
+	# a partial block behind that looked exactly like a complete one. On
+	# 2026-09-17 17:00 the harness's 30s Bash timeout moved this script to the
+	# background and it then died partway through duA, writing 213 of 1297
+	# keys. The 09-18 09:00 diff read every unmeasured directory as having
+	# grown by its own size and reported +6.09 GB of Docker growth, +3.22 GB
+	# of DerivedData and +8.71 GB of /private/var/folders that never happened,
+	# against a machine where Docker had not moved a byte in two days.
+	#
+	# Two defences, because either alone is thin: the whole block lands in one
+	# append (~1ms, versus a ~4min window), and block.complete is the last key
+	# written, so a block that died anyway is identifiable rather than silent.
+	BLOCK=$(mktemp -t disk-baseline-block) || return 1
+	# shellcheck disable=SC2064
+	trap "rm -f '$BLOCK'" EXIT INT TERM
+
 	{
 		# Every mounted volume, not just Data. All APFS volumes share one
 		# container, so swap growth on /System/Volumes/VM eats Data's free
@@ -124,7 +143,19 @@ snapshot() {
 
 			printf '%s\tsweep.full\t1\n' "$run_ts"
 		fi
-	} >>"$TSV"
+
+		# Terminator. Must stay the last line written in this block.
+		printf '%s\tblock.complete\t1\n' "$run_ts"
+	} >"$BLOCK"
+
+	# Refuse to append a block that did not reach its own terminator, rather
+	# than handing the next run a short one to misread.
+	if ! tail -n 1 "$BLOCK" | grep -q "$(printf 'block.complete\t1')"; then
+		echo "baseline ABORTED: block did not complete, nothing appended to $TSV" >&2
+		return 1
+	fi
+
+	cat "$BLOCK" >>"$TSV"
 
 	[ "$full" -eq 1 ] && touch "$STAMP"
 
@@ -143,12 +174,25 @@ diff_pair() {
 			if (!have(k)) { printf "HEAD\t%s\tnot measured\n", label; return }
 			printf "HEAD\t%s\t%+.2f GB\n", label, (n[k] - o[k]) / gib
 		}
-		$1 == a { o[$2] = $3; seen[$2] = 1 }
-		$1 == b { n[$2] = $3; seen[$2] = 1 }
+		$1 == a { o[$2] = $3; seen[$2] = 1; if ($2 ~ kre) ocount++; if ($2 == "block.complete") odone = 1 }
+		$1 == b { n[$2] = $3; seen[$2] = 1; if ($2 ~ kre) ncount++; if ($2 == "block.complete") ndone = 1 }
 		END {
 			for (k in seen) {
 				if (k ~ kre) {
-					d = (k in n ? n[k] : 0) - (k in o ? o[k] : 0)
+					# A key measured in only ONE block is not movement, and
+					# calling it movement is how this script invented 20 GB of
+					# overnight growth on 2026-09-18. Treating a missing old
+					# value as zero reports the entire current size of a dir
+					# as growth; treating a missing new value as zero reports
+					# it as deletion. Neither was observed. Count them, keep
+					# them out of the explained sum so they surface as
+					# UNATTRIBUTED, and let the reader see the scale.
+					if (!have(k)) {
+						if (k in n) { onlynew++; onlybytes += n[k] }
+						else        { onlyold++; onlybytes += o[k] }
+						continue
+					}
+					d = n[k] - o[k]
 					explained += d
 					ad = (d < 0 ? -d : d)
 					# 10 MB floor, so the list is movement and not noise
@@ -185,6 +229,23 @@ diff_pair() {
 			printf "HEAD\tExplained by du\t%+.2f GB\n", explained / gib
 			printf "HEAD\tUNATTRIBUTED (Data)\t%+.2f GB\n", (target - explained) / gib
 
+			# Coverage. A diff is only as good as the thinner of its two
+			# blocks, and until 2026-09-18 nothing in the output said how
+			# thin that was.
+			printf "HEAD\tKeys compared\t%d of %d old / %d new\n", ocount - onlyold, ocount, ncount
+			if (onlynew + onlyold > 0)
+				printf "HEAD\tMeasured one side only\t%d keys, %.2f GB unknown\n", onlynew + onlyold, onlybytes / gib
+
+			# block.complete is written last by snapshot(). Blocks recorded
+			# before it existed do not carry it, so fall back to comparing key
+			# counts: a block holding under 60%% of the keys its neighbour has
+			# died mid-sweep. The 2026-09-17 17:00 block had 213 duA keys
+			# against 1297 either side, and no run noticed.
+			lo = (ocount < ncount ? ocount : ncount)
+			hi = (ocount > ncount ? ocount : ncount)
+			if ((!odone && ocount < ncount * 0.6) || (!ndone && ncount < ocount * 0.6))
+				printf "TRUNC\t%d\t%d\tone block is short (%d vs %d keys) and carries no block.complete marker: it died mid-sweep. Movement below is NOT trustworthy.\n", lo, hi, ocount, ncount
+
 			# Container ledger: where the free space actually went.
 			#
 			# Every APFS volume in one container draws on a single free pool,
@@ -210,7 +271,17 @@ diff_pair() {
 		}' "$TSV" >"$TMPF"
 
 	echo "$5"
-	grep '^HEAD' "$TMPF" | cut -f2- | awk -F'\t' '{ printf "  %-20s %s\n", $1, $2 }'
+
+	# Loud and first. A short block poisons every number under it, so this
+	# must not read as a footnote the way "not measured" did.
+	if grep -q '^TRUNC' "$TMPF"; then
+		echo "  !! TRUNCATED BASELINE !!"
+		grep '^TRUNC' "$TMPF" | cut -f4- | awk '{ printf "  !! %s\n", $0 }'
+		echo "  !! Report this as a defect and set Severity: attention. Do not"
+		echo "  !! quote the movers below as growth."
+	fi
+
+	grep '^HEAD' "$TMPF" | cut -f2- | awk -F'\t' '{ printf "  %-24s %s\n", $1, $2 }'
 
 	if grep -q '^LEDGERSUM' "$TMPF"; then
 		echo
