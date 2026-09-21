@@ -74,7 +74,7 @@ Read `logs/pr-review-state.json` (JSON; create `{ "reviewed": {},
 
 ```json
 {
-  "reviewed":   { "<owner>/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>" } },
+  "reviewed":   { "<owner>/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>", "skipped": "too-large (optional)" } },
   "dependabot": { "<owner>/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|analyzed|rebase|recreate|skipped-env", "at": "<iso>" } }
 }
 ```
@@ -199,16 +199,62 @@ For each human by-name PR:
 
 1. **Skip-if-unchanged:** if `reviewed["<owner>/<repo>#<num>"].sha`
    equals the current `head` sha, do **not** re-review. Record it for the
-   compact "Previously reviewed — no new commits" list and move on.
-2. Otherwise spawn an inner Claude to review it. Build the inner prompt
+   compact "Previously reviewed — no new commits" list and move on. One
+   exception: if that entry carries `skipped: "too-large"`, it was never
+   actually reviewed — list it under "📏 Too large to auto-review" instead,
+   marked `(unchanged since <at>)`, and move on.
+
+2. **Size gate — never spawn a review for a PR that is too big.** A 150-file
+   diff doesn't produce a review, it produces a timeout: the inner Claude
+   spends the whole budget reading and returns nothing, which is strictly
+   worse than an honest skip (css-api#220 on 2026-09-21 — 151 files, 23m35s,
+   zero output). Decide from the Step 2 numbers before spawning anything:
+
+   - `files <= 50` **and** `adds + dels <= 3000` → in budget, go to 3.
+   - Otherwise re-measure without generated files before deciding. A
+     regenerated `package-lock.json` is thousands of lines nobody reviews, and
+     it shouldn't disqualify a small source change:
+
+     ```bash
+     gh api --paginate /repos/<owner>/<repo>/pulls/<num>/files \
+       --jq '.[] | select((.filename | test("(^|/)(package-lock\\.json|yarn\\.lock|pnpm-lock\\.yaml)$|(^|/)(dist|build|coverage|generated)/|\\.snap$")) | not)
+             | {f: .filename, n: (.additions + .deletions)}'
+     ```
+
+     Count the surviving files and sum their `n`. If **both** are back inside
+     the limits, review it normally (go to 3). If either still exceeds them,
+     the PR is **too large** — skip it.
+
+   On a skip: spawn nothing, run no `claude -p`, produce no findings. Record
+   `reviewed["<owner>/<repo>#<num>"] = { sha: <head>, at: <now>, skipped:
+   "too-large" }` and collect for the "📏 Too large to auto-review" section —
+   size (`+<adds>/-<dels>, <files> files`, plus the non-generated figures when
+   they differ), `mergeable_state`, and the 3–5 directories with the most
+   changed lines from the file list above. That breakdown costs nothing extra
+   (you already fetched the files) and tells Gabor where the PR lands without
+   anyone reading 15k lines. Say plainly that it was skipped for size and
+   needs a human read — never dress a skip up as a review.
+
+   The thresholds are deliberately generous: they exist to catch the
+   150-file branch-move, not to duck a normal feature PR. Don't skip a PR that
+   sits inside them because it "looks hard", and don't lower them on your own.
+
+3. Otherwise spawn an inner Claude to review it. Build the inner prompt
    from `## Inner review prompt template` below, write it to
-   `/tmp/pr-review-<repo>-<num>.md`, then run with the repo as cwd and a
-   5-minute timeout:
+   `/tmp/pr-review-<repo>-<num>.md`, then run with the repo as cwd:
 
    ```bash
    (cd ../<repo> && claude -p --model claude-opus-5 --effort high \
       --output-format text < /tmp/pr-review-<repo>-<num>.md)
    ```
+
+   **Bound it with the Bash tool's own `timeout` parameter — set it to
+   `300000` (5 minutes).** That parameter is the only working budget here:
+   there is no `timeout` / `gtimeout` binary on this Mac, so wrapping the
+   command in `timeout 300 …` exits 127 with empty stdout and looks exactly
+   like a silent agent failure. With the size gate in place a review that
+   still hits 5 minutes is stuck, not slow — let it die and record the
+   placeholder.
 
    The inner review does **not** inherit the outer run's model — without
    `--model` it falls back to the CLI default. Keep both flags in sync with
@@ -216,9 +262,11 @@ For each human by-name PR:
    review quality actually comes from.
 
    Capture stdout. Delete the temp file.
-3. If the call errors / times out / returns empty, record a
-   `(review failed: <reason>)` placeholder and continue.
-4. On success, set `reviewed["<owner>/<repo>#<num>"] = { sha: <head>, at: <now> }`.
+4. If the call errors / times out / returns empty, record a
+   `(review failed: <reason>)` placeholder and continue. Kill the process if
+   it outlived its budget, and check afterwards that `../<repo>` is still on
+   its original branch with a clean `git status --short`.
+5. On success, set `reviewed["<owner>/<repo>#<num>"] = { sha: <head>, at: <now> }`.
 
 The inner review is for **Gabor's eyes only** — it must NOT post anything
 to GitHub. Its stdout goes verbatim into the log.
@@ -990,9 +1038,9 @@ heading with `_None._` if empty, for a stable shape):
 # PR review queue — <TODAY local>
 
 <headline — counts DERIVED from the sections below, opening with the queue
- reconciliation, e.g. "15 PRs in queue · 3 need your review · 2 dependabot
- fixed · 1 commented · 4 safe to merge · 2 still open from earlier runs ·
- 5 group-assigned (excluded) · 1 draft">
+ reconciliation, e.g. "15 PRs in queue · 3 need your review · 1 too large to
+ auto-review · 2 dependabot fixed · 1 commented · 4 safe to merge · 2 still
+ open from earlier runs · 5 group-assigned (excluded) · 1 draft">
 
 ## ⚠️ Needs your review
 ### <repo>#<num> — <title>  ·  by <author>  ·  +<adds>/-<dels>, <files> files
@@ -1004,6 +1052,15 @@ heading with `_None._` if empty, for a stable shape):
 - [concern] …
 - [nit] …
 <new commits since last review: <short sha> | first review>
+
+## 📏 Too large to auto-review — read it yourself
+### <repo>#<num> — <title>  ·  by <author>  ·  +<adds>/-<dels>, <files> files
+<url>
+**Skipped:** over the Step 4 size gate (<50 files / 3000 changed lines>), so no
+review was attempted — <non-generated figures when they differ from the raw
+ones>. Branch is `<mergeable_state>`.
+**Where it lands:** <3–5 directories with the most changed lines>
+<first skip at this sha | unchanged since <at>>
 
 ## 🔁 Previously reviewed — no new commits
 - <repo>#<num> <title> <url>
@@ -1072,7 +1129,9 @@ Severity:
 - `attention` — any of: ≥1 human PR needs review, ≥1 dependabot fix was
   pushed, ≥1 dependabot PR was commented (needs Gabor), ≥1 dependabot PR was
   skipped for a run-env limitation (Gabor needs to log into npm or handle it
-  himself), ≥1 internal `@kasadev/*` bump came back **⚠️ review before merge**
+  himself), ≥1 human PR was skipped as **too large** at a sha not skipped
+  before (nothing was reviewed — he has to read it), ≥1 internal `@kasadev/*`
+  bump came back **⚠️ review before merge**
   (a breaking change touches what the repo uses), or ≥1 safe-to-merge PR is
   waiting. (A major/group bump whose Step 5i verdict is **✅ safe to merge**
   counts as a safe-to-merge PR waiting.) (The normal weekday state.)
@@ -1081,6 +1140,11 @@ Severity:
   already-reviewed / pending / auto-removed-opt-out / still-open-from-earlier
   -runs). Auto-removing Gabor from an opt-out repo is routine cleanup — log
   it, but it never by itself bumps severity or fires a notification.
+
+**📏 An unchanged too-large skip never bumps severity either.** The first run
+that skips a given sha says so loudly; repeating it every morning until Gabor
+merges or splits the PR would train him to ignore the banner. It stays visible
+in the report and silent in the notification until the sha moves.
 
 **🕓 Still open from earlier runs never bumps severity.** Those PRs were
 already surfaced on the day they were handled; re-firing a banner every
@@ -1099,7 +1163,8 @@ If `attention` or `failure`, append a `## Notification` block:
 - body: <single most important item, ~90 chars. Prefer a source-edit
         auto-push (esp. a major — needs a semantics check before merge);
         else an internal @kasadev bump that came back ⚠️ review before merge;
-        else a human PR needing review; else a commented/failing
+        else a newly skipped too-large PR (name it and say it needs his own
+        read); else a human PR needing review; else a commented/failing
         dependabot; else "K PRs safe to merge">
 - sound: default
 ```
