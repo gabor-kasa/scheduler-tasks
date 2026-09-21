@@ -24,9 +24,11 @@ GitHub login is `gabor-kasa`, work org `kasadev`, local timezone
 Europe/Budapest. **Read-only run.** Never post a comment, submit a review,
 merge, close, assign, or push. Nothing in this task mutates GitHub.
 
-The whole value of this task is that a banner means something happened.
-Four signals fire a banner and nothing else does. Everything else goes in
-the log for Gabor to read when he wants to.
+The whole value of this task is that a banner means something happened
+**that somebody else did**. Six signals fire a banner and nothing else
+does, and every one of them is subject to the self rule in Step 3: an
+action Gabor took himself is never a banner, however it reaches the API.
+Everything else goes in the log for him to read when he wants to.
 
 ### Step 0 — Working-hours guard
 
@@ -99,8 +101,12 @@ Then, per PR, pull the detail (this exact command is verified to work):
 
 ```bash
 gh pr view <num> --repo <owner>/<repo> --json \
-  number,title,url,isDraft,reviewDecision,headRefOid,updatedAt,reviews,comments,statusCheckRollup
+  number,title,url,isDraft,state,reviewDecision,headRefOid,updatedAt,reviews,comments,statusCheckRollup,mergedBy
 ```
+
+`state` and `mergedBy` are not optional extras. Step 4 needs `mergedBy` to
+tell somebody else's merge from Gabor's own click, and without it every
+self-merge fires a banner.
 
 If `gh` fails on auth or rate limit, stop, write the error into the log,
 set severity `failure`, and fire a banner saying the watch is blind. A
@@ -113,8 +119,18 @@ reviewer. List it in the report under Drafts and compute no signals for it.
 
 Activity falls into three buckets, counted separately.
 
-**Self, excluded.** `gabor-kasa`. On css-api#214 five of the seven reviews
-were his own; counting them makes the numbers lie.
+**Self, excluded from every signal, not just the counts.** `gabor-kasa`.
+On css-api#214 five of the seven reviews were his own; counting them makes
+the numbers lie. Verified live on 2026-09-21: smartthings-sync#223 carries
+15 `gabor-kasa` reviews and 1 `gabor-kasa` comment, and the filter below
+correctly counts 9 human reviews and 2 human comments, all norbertp-kasa's.
+Do not "fix" that by folding his own activity back in.
+
+The count filter is only half the rule. Comments and reviews are filtered
+here; **merges are filtered in Step 4**, because a merge arrives as a state
+change with no author attached to it. The rule that governs both: *if Gabor
+did it, he already knows, so it never becomes a banner.* Apply that to any
+signal added later, not only to the six listed today.
 
 **Noise bots, excluded.** `github-actions` and `jira-dashboard-kasadev`
 post CI status and Jira links. Neither is a review. Also exclude any login
@@ -137,10 +153,11 @@ Pipe to real `jq`, not `gh --jq`. **`gh pr view --jq` does not accept
 SKIP='gabor-kasa|github-actions|jira-dashboard-kasadev|\[bot\]'
 DEVIN='devin-ai-integration'
 gh pr view <num> --repo <owner>/<repo> --json \
-  number,isDraft,state,reviewDecision,headRefOid,reviews,comments,statusCheckRollup \
+  number,isDraft,state,reviewDecision,headRefOid,reviews,comments,statusCheckRollup,mergedBy \
 | jq -c --arg skip "$SKIP" --arg devin "$DEVIN" '{
     state: .state, draft: .isDraft, sha: .headRefOid[0:8],
     decision: (.reviewDecision // "NONE"),
+    mergedBy: (.mergedBy.login // null),
     humanReviews:  [.reviews[] |select(.author.login|test($skip)|not)
                                |select(.author.login != $devin)]|length,
     humanComments: [.comments[]|select(.author.login|test($skip)|not)
@@ -161,8 +178,8 @@ a person waiting on you outranks a bot that already left its notes.
 
 ### Step 4 — Diff against state, pick signals
 
-For each non-draft PR, compare to its stored entry. Exactly four signals
-fire a banner:
+For each non-draft PR, compare to its stored entry. Six signals can fire a
+banner, and `closed` carries the self-merge condition:
 
 | Signal | Condition |
 |---|---|
@@ -171,7 +188,41 @@ fire a banner:
 | `new_comment` | `humanReviews` or `humanComments` went **up** |
 | `devin_review` | `devinReviews` went **up** |
 | `ci_red` | `ciFail` went from `0` to `>0` |
-| `closed` | `state` became `MERGED` or `CLOSED` |
+| `closed` | `state` became `MERGED` or `CLOSED` **and `mergedBy` is not `gabor-kasa`** |
+
+**A self-merge is not news.** When `mergedBy` is `gabor-kasa`, Gabor clicked
+the button himself seconds earlier and a banner telling him so is pure echo.
+Measured on 2026-09-21: of the last five merge banners, three were his own
+clicks (github-workflows#100 on 09-16, css-debugger#97 on 09-18,
+add-on-service#732 on 09-21) and only two were somebody else's
+(ai-developer-tools#616 and #595, both merged by andrew-kasa). Suppress the
+signal, still prune the entry per Step 5, and log the closure under
+**Your own actions** in the report so the suppression is visible rather than
+silent.
+
+A PR **closed without merging** is the same case, but `mergedBy` is null and
+`gh pr view` has no `closedBy` field. Checked on 2026-09-21, it errors with
+`Unknown JSON field: "closedBy"`. The actor lives in the events API instead,
+verified against css-debugger#97:
+
+```bash
+gh api repos/<owner>/<repo>/issues/<num>/events \
+  --jq '[.[]|select(.event=="closed" or .event=="merged")|{event,actor:.actor.login}]'
+# -> [{"actor":"gabor-kasa","event":"merged"},{"actor":"gabor-kasa","event":"closed"}]
+```
+
+Only make that extra call for a PR that went `CLOSED` unmerged, which is
+rare. If the call fails, suppress the banner anyway: an unmerged close of
+his own PR is nearly always his own doing, and a missed banner there is
+cheaper than an echo.
+
+Somebody else merging his PR **does** still fire, and keeps its place in the
+Step 6 priority order. That is genuine news: the work shipped without him
+touching it.
+
+`approved` and `changes_requested` need no author check. GitHub refuses a
+review on your own PR, so `reviewDecision` cannot be moved by `gabor-kasa`
+and there is nothing to filter. Do not add machinery for it.
 
 **A signal fires once per sha.** Store every fired signal in the PR's
 `notified` array and never re-fire one already listed there. A PR that has
@@ -185,7 +236,9 @@ starts over and a fresh approval or comment is genuinely new.
 
 Never fire on: a count going *down* (a deleted comment), `decision` moving
 to `REVIEW_REQUIRED` on its own (that is just a re-request after his push),
-a draft, or a PR that appeared for the first time this run.
+a draft, a PR that appeared for the first time this run, or **anything
+`gabor-kasa` did himself**: his own merge, his own close, his own comment,
+his own review.
 
 ### Step 5 — Write the log + persist state
 
@@ -214,6 +267,9 @@ headings with `_None._` so the shape is stable run to run.
 ## 😴 Quiet — no change since last run
 - <repo>#<num> — <title> · waiting <N>d on <reviewers> · <decision>
 
+## 🙋 Your own actions (logged, never bannered)
+- <repo>#<num> — <title> · merged by you at <time>
+
 ## ✏️ Drafts (excluded)
 - <repo>#<num> — <title>
 
@@ -235,11 +291,14 @@ Absence from the `gh search prs` result is *not* evidence that a PR closed;
 it is most often index lag. Before dropping any known PR, verify it directly:
 
 ```bash
-gh pr view <num> --repo <owner>/<repo> --json state,mergedAt
+gh pr view <num> --repo <owner>/<repo> --json state,mergedAt,mergedBy
 ```
 
-Prune only on `MERGED` or `CLOSED`, and fire the `closed` signal on that same
-transition so the merge is reported rather than silently vanishing. If the
+Prune only on `MERGED` or `CLOSED`. Fire the `closed` signal on that same
+transition so the merge is reported rather than silently vanishing.
+**Unless `mergedBy` is `gabor-kasa`**, in which case prune quietly and write
+the closure into the **Your own actions** section instead. Pruning happens
+either way; only the banner is suppressed. If the
 verify call itself fails, **keep the entry** and note it in the log. A stale
 entry costs one line in a JSON file; a wrongly pruned one costs the watch,
 because Step 4 never fires on a PR seen for the first time, so a re-seeded PR
@@ -250,6 +309,12 @@ swallows whatever happened while it was missing.
 - `failure` — `gh` failed and the watch could not run. Error text in the log.
 - `attention` — at least one signal fired this run.
 - `ok` — nothing fired. Silence is the success state.
+
+A run whose only event was one of Gabor's own actions is `ok`, not
+`attention`. Because `quiet: true` deletes `ok` logs, that run's **Your own
+actions** section disappears with it. That is intended: he merged it, he
+knows. The section earns its place on runs that also carry a real signal,
+where it shows what was deliberately left out of the banner.
 
 On `attention` or `failure`, append exactly one block:
 
