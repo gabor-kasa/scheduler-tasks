@@ -1,7 +1,7 @@
 ---
 id: my-prs-watch
 icon: bell.badge
-title: My open PRs — notify when a reviewer acts
+title: My PRs — notify when a reviewer acts or a review waits on me
 type: recurring
 model: claude-sonnet-5
 effort: low
@@ -14,20 +14,28 @@ status: active
 
 ## Instructions
 
-Watch Gabor's **own** open pull requests and raise a desktop banner when
-somebody else acts on one. This is the outbound counterpart to
-`pr-review-queue.md`, which covers the inbound direction (PRs waiting on
-Gabor's review). That task runs once at 06:30; this one runs every 30
-minutes through the working day.
+Watch two things and raise a desktop banner when either moves:
+
+1. **Outbound.** Gabor's **own** open pull requests, when somebody else acts
+   on one (Steps 2 to 4).
+2. **Inbound.** Other people's PRs where Gabor is a reviewer, when the next
+   move is his: a new review request, feedback he left that the author has
+   now addressed, or a question put to him in a comment (Step 4b).
+
+`pr-review-queue.md` also covers the inbound direction, but only as a
+once-a-day 06:30 digest with auto-reviews. This task is the daytime banner:
+it runs every 30 minutes through the working day and says "somebody is
+waiting on you" within half an hour of it becoming true.
 
 GitHub login is `gabor-kasa`, work org `kasadev`, local timezone
 Europe/Budapest. **Read-only run.** Never post a comment, submit a review,
 merge, close, assign, or push. Nothing in this task mutates GitHub.
 
 The whole value of this task is that a banner means something happened
-**that somebody else did**. Six signals fire a banner and nothing else
-does, and every one of them is subject to the self rule in Step 3: an
-action Gabor took himself is never a banner, however it reaches the API.
+**that somebody else did**. Six outbound signals (Step 4) and three inbound
+signals (Step 4b) fire a banner and nothing else does, and every one of
+them is subject to the self rule in Step 3: an action Gabor took himself is
+never a banner, however it reaches the API.
 Everything else goes in the log for him to read when he wants to.
 
 ### Step 0 — Working-hours guard
@@ -72,14 +80,44 @@ Read `logs/my-prs-state.json`. Shape:
       "notified": ["approved", "devin_review"],
       "at": "2026-09-09T14:00:00+02:00"
     }
+  },
+  "reviewingCheckedAt": "2026-09-23T15:00:00+02:00",
+  "reviewing": {
+    "kasadev/device-service#189": {
+      "sha": "8c5d2853",
+      "author": "norbertp-kasa",
+      "requested": false,
+      "myReviewCount": 3,
+      "myLastReviewAt": "2026-09-23T19:05:34Z",
+      "lastAsk": "2026-09-21T10:56:31Z",
+      "notified": ["review_requested", "re_review@2026-09-14T16:08:54Z"],
+      "at": "2026-09-23T15:00:00+02:00"
+    }
   }
 }
 ```
+
+`prs` is the outbound side (Steps 2 to 4), `reviewing` the inbound side
+(Step 4b). `reviewingCheckedAt` is the time of the last in-window run that
+refreshed `reviewing`.
 
 If the file is missing or unparseable, treat it as `{"prs":{}}` and run in
 **seed mode**: record current state for every PR, write the log, and fire
 **no** notification. A first run must not banner four days of accumulated
 history at him.
+
+**Seed each side on its own.** If the file parses but has no `reviewing`
+key, which is exactly what the first run after the inbound side was added
+on 2026-09-23 will see, seed `reviewing` silently while `prs` runs
+normally. Otherwise that run would banner every open review request in the
+org as if it had just arrived.
+
+Seeding `reviewing` means more than copying fields. The inbound signals are
+conditions, not diffs, so a seed run must also **pre-mark every condition
+that is already true**: add `review_requested` and the current
+`re_review@<myLastReview.at>` to `notified` wherever they hold, and set
+`lastAsk` to the newest ask. Skip that and the second run banners them all.
+On 2026-09-23 that would have been css-api#222, kontrol-ui#3094 and more.
 
 ### Step 2 — Build the PR list
 
@@ -240,6 +278,132 @@ a draft, a PR that appeared for the first time this run, or **anything
 `gabor-kasa` did himself**: his own merge, his own close, his own comment,
 his own review.
 
+### Step 4b — Reviews waiting on you (inbound)
+
+**Build the list.** Union three searches, then union the keys already in
+`reviewing` (same index-lag reason as Step 2):
+
+```bash
+for q in --review-requested=@me --reviewed-by=@me --mentions=@me; do
+  gh search prs $q --state=open --json repository,number,author --limit 50
+done
+```
+
+Drop these before fetching detail:
+
+- **His own PRs** (`author == gabor-kasa`). Those are the outbound side.
+- **Bot-authored PRs** (login matching `\[bot\]`, or `app/`). Dependabot PRs
+  are `pr-review-queue.md`'s job at 06:30; nobody is waiting on him there.
+- **Reviewer opt-out repos.** Use the list under "Reviewer opt-out repos" in
+  `tasks/pr-review-queue.md` and read it from there each run, so there is one
+  list. Do **not** remove him as a reviewer here. That mutation belongs to
+  `pr-review-queue.md` and this run is read-only.
+
+Then per PR, run this. Verified on 2026-09-23 against device-service#189,
+css-api#222, code-setting-service#967, kontrol-ui#3094, salto-sync#120 and
+css-api#183. Save it to a temp script and call it with `bash`, not inline:
+the shell here is zsh, which does not word-split an unquoted `$var`, so a
+`for p in "repo num"` loop hands `gh` one glued argument and fails with
+`accepts 1 arg(s), received 2`.
+
+```bash
+#!/bin/bash
+# usage: bash inbound.sh <owner>/<repo> <num>
+R=$1; N=$2
+BOT='\[bot\]|github-actions|jira-dashboard-kasadev|devin-ai-integration|cursor'
+PR=$(gh pr view $N --repo $R --json author,isDraft,state,headRefOid,reviewRequests,reviews,comments)
+IC=$(gh api --paginate repos/$R/pulls/$N/comments \
+  --jq '[.[]|{id,a:.user.login,re:.in_reply_to_id,at:.created_at,body}]' | jq -s 'add // []')
+jq -nc --argjson pr "$PR" --argjson ic "$IC" --arg bot "$BOT" '
+  ($pr.reviews|map(select(.author.login=="gabor-kasa"))) as $mine
+  | ($ic|map(select(.a=="gabor-kasa")|.id)) as $myIds
+  | ([$mine[].submittedAt] + [$ic[]|select(.a=="gabor-kasa")|.at]
+     + [$pr.comments[]|select(.author.login=="gabor-kasa")|.createdAt] | max) as $myLast
+  | {
+    author: $pr.author.login, draft: $pr.isDraft, state: $pr.state, sha: $pr.headRefOid[0:8],
+    requested: ([$pr.reviewRequests[]|.login]|index("gabor-kasa") != null),
+    myReviewCount: ($mine|length),
+    myLastReview: ($mine|last|if . then {state, at:.submittedAt, sha:.commit.oid[0:8]} else null end),
+    myLastActivity: $myLast,
+    asks: (
+      [ $pr.comments[] | select(.author.login|test($bot)|not) | select(.author.login!="gabor-kasa")
+        | select(.body|test("@gabor-kasa\\b")) | {kind:"mention", who:.author.login, at:.createdAt} ]
+    + [ $pr.reviews[] | select(.author.login|test($bot)|not) | select(.author.login!="gabor-kasa")
+        | select(.body|test("@gabor-kasa\\b")) | {kind:"mention", who:.author.login, at:.submittedAt} ]
+    + [ $ic[] | select(.a|test($bot)|not) | select(.a!="gabor-kasa")
+        | select((.body|test("@gabor-kasa\\b")) or ((.re // -1) as $r | $myIds|index($r) != null))
+        | {kind:(if (.body|test("@gabor-kasa\\b")) then "mention" else "reply" end), who:.a, at} ]
+    | sort_by(.at) )
+  }'
+```
+
+What the fields mean, and the traps behind them:
+
+- `requested` is **by name only**. `review-requested:@me` also returns PRs
+  where only a team he belongs to is requested; a team entry in
+  `reviewRequests` has no `login`, so it never sets this. Team-only requests
+  are not his to act on (the same rule `pr-review-queue.md` applies).
+- GitHub **removes** a reviewer from `reviewRequests` when he submits a
+  review. So `requested == true` with `myReviewCount > 0` means the author
+  put him back: an explicit re-request. device-service#189 showed exactly
+  that on 2026-09-22 after his COMMENTED review.
+- `asks` are comments from a person, not a bot, that either mention
+  `@gabor-kasa` or reply inside an inline thread he started. The bot filter
+  is load-bearing: `jira-dashboard-kasadev` mentions `@gabor-kasa` on nearly
+  every PR (four times on device-service#189 alone), and without the filter
+  every Jira sync would read as a question.
+- `myLastActivity` is his newest review, inline comment or PR comment. An
+  ask older than that is one he has already answered.
+
+**Drafts are excluded**, same as outbound. A PR that turns out `MERGED` or
+`CLOSED` is pruned from `reviewing` quietly: somebody else's PR closing is
+not news to him. Only prune on a confirmed state, same rule as Step 5.
+
+The Step 2 failure rule covers these calls too: an auth or rate-limit error
+on a search means the watch is blind, so report `failure`. If only one PR's
+detail fetch fails, keep its entry unchanged, note it in the log and carry
+on.
+
+**Signals.** Three, each subject to the self rule:
+
+| Signal | Condition | Fires at most |
+|---|---|---|
+| `review_requested` | `requested` and `myReviewCount == 0` | once per PR |
+| `re_review` | `myReviewCount > 0`, the last review is not `APPROVED`-and-unrequested, and either `requested` (re-requested) or the head `sha` differs from `myLastReview.sha` (new commits since his feedback) | once per review round, keyed `re_review@<myLastReview.at>` |
+| `question` | an entry in `asks` newer than both `myLastActivity` and the entry's `lastAsk` (for a PR new to state, `reviewingCheckedAt`) | once per new ask |
+
+Spelled out, `re_review` fires when:
+
+- his last review was `CHANGES_REQUESTED` or `COMMENTED` and the author
+  pushed since, or
+- he was re-requested after any review, including an approval.
+
+An `APPROVED` review followed by more commits and no re-request is not
+waiting on him. That is the author finishing up.
+
+Why the keys differ from outbound's once-per-sha:
+
+- `review_requested` is once per PR because the **initial** request is the
+  news. Later pushes are not a second request.
+- `re_review` is keyed to his review, not the sha. Otherwise every push the
+  author makes after his feedback would banner again. One banner per round
+  of his feedback. When he reviews again, `myLastReview.at` changes and the
+  next round can fire.
+- `question` advances `lastAsk` to the newest ask it reported, so each
+  question banners once.
+
+Unlike outbound, a PR seen for the first time **does** fire
+`review_requested` (after seed mode). A brand-new request is exactly the
+event. `question` on a first-seen PR only counts asks newer than
+`reviewingCheckedAt`, so a mention search that surfaces an old thread does
+not banner history.
+
+Never fire inbound on: a team-only request, a bot comment, his own comment
+or review, a draft, or a PR he authored.
+
+Persist `reviewing` and set `reviewingCheckedAt` to now in the same state
+write as Step 5.
+
 ### Step 5 — Write the log + persist state
 
 **Output contract.** The run's stdout IS the log. Emit the report below
@@ -249,7 +413,7 @@ The `## Notification` block, or `## Outcome` when there is no notification,
 is the **last thing in the output**. Nothing follows it. Put any execution
 commentary *before* the `# My open PRs` heading.
 
-Every PR from Step 1 appears exactly once across the sections. "No change"
+Every PR from Step 2 and Step 4b appears exactly once across the sections. "No change"
 is a reason to write a one-line entry, never to omit one. Keep empty
 headings with `_None._` so the shape is stable run to run.
 
@@ -257,7 +421,8 @@ headings with `_None._` so the shape is stable run to run.
 # My open PRs — <TODAY local> <HH:MM>
 
 <headline, counts derived from the sections below, e.g.
- "7 open · 1 approved · 1 new comment · 1 Devin review · 4 quiet · 1 draft">
+ "7 open · 1 approved · 1 new comment · 1 Devin review · 4 quiet · 1 draft
+  · reviewing: 1 new request · 1 question · 5 waiting on you">
 
 ## 🔔 New since last run
 ### <repo>#<num> — <title>
@@ -266,6 +431,20 @@ headings with `_None._` so the shape is stable run to run.
 
 ## 😴 Quiet — no change since last run
 - <repo>#<num> — <title> · waiting <N>d on <reviewers> · <decision>
+
+## 👀 Waiting on your review — new since last run
+### <repo>#<num> — <title> (by <author>)
+- <review_requested | re_review | question>: <who, what, when; for a
+  question, quote its first ~100 chars>
+- <url>
+
+## 👀 Waiting on your review — standing
+- <repo>#<num> — <title> (by <author>) · <why it waits on you: requested
+  <N>d ago / pushed since your changes-requested / unanswered question from
+  <who>> · already bannered
+
+## 💤 Reviewing — nothing waiting on you
+- <repo>#<num> — <title> · <e.g. you approved, no new request>
 
 ## 🙋 Your own actions (logged, never bannered)
 - <repo>#<num> — <title> · merged by you at <time>
@@ -307,7 +486,7 @@ swallows whatever happened while it was missing.
 ### Step 6 — Severity + Notification
 
 - `failure` — `gh` failed and the watch could not run. Error text in the log.
-- `attention` — at least one signal fired this run.
+- `attention` — at least one signal fired this run, outbound or inbound.
 - `ok` — nothing fired. Silence is the success state.
 
 A run whose only event was one of Gabor's own actions is `ok`, not
@@ -322,11 +501,11 @@ On `attention` or `failure`, append exactly one block:
 ## Notification
 
 - title: PR activity
-- subtitle: <e.g. "kontrol-ui#3044 approved">
+- subtitle: <e.g. "kontrol-ui#3044 approved" or "css-api#222 review requested">
 - body: <the single most important item, ~90 chars. Priority order:
-        changes_requested, then closed, then approved, then ci_red, then
-        new_comment, then devin_review last. Name the repo, number, and
-        who acted.>
+        changes_requested, question, re_review, closed, approved,
+        review_requested, ci_red, new_comment, devin_review last. Name the
+        repo, number, and who acted. If more fired, end with "+N more".>
 - sound: default
 ```
 
@@ -361,5 +540,12 @@ push would need a `pull_request_review` webhook, which belongs in
 side). That is the org-wide fix and helps every author on the team, not
 just this machine.
 
-Related: `tasks/pr-review-queue.md` for the inbound direction, and the
+The inbound side was added on 2026-09-23. `pr-review-queue.md` already
+covered the inbound direction, but only at 06:30. A review request that
+lands at 10:00, or an author who answers his feedback at 11:00, sat unseen
+until the next morning. The three inbound signals map onto what he asked
+for: the initial request (`review_requested`), feedback he left that was
+then addressed (`re_review`), and a question put to him (`question`).
+
+Related: `tasks/pr-review-queue.md` for the daily inbound digest, and the
 `shared-kasa-review-queue` skill for the same thing on demand.
