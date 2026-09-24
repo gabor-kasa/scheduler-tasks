@@ -64,6 +64,10 @@ The task does these, in priority order:
    red, fix it in an isolated worktree and **auto-push when CI goes green
    locally** (metadata or source edits alike — a source edit is pushed
    but loudly flagged and never merged), else comment a diagnosis.
+4. **Gabor's own PRs with merge conflicts** (source C, Step 6g): merge
+   `master` into the branch in a worktree, resolve the conflict when it is
+   mechanical (lockfile, dependency stanzas, changelog), verify the full
+   suite, and push. Anything else is listed for him, not touched.
 
 Everything routes into one log Gabor reads with his coffee.
 
@@ -75,9 +79,13 @@ Read `logs/pr-review-state.json` (JSON; create `{ "reviewed": {},
 ```json
 {
   "reviewed":   { "<owner>/<repo>#<num>": { "sha": "<head sha>", "at": "<iso>", "skipped": "too-large (optional)" } },
-  "dependabot": { "<owner>/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|analyzed|rebase|recreate|skipped-env", "at": "<iso>" } }
+  "dependabot": { "<owner>/<repo>#<num>": { "sha": "<head sha>", "action": "commented|pushed|pushed-source|safe|analyzed|rebase|recreate|skipped-env", "at": "<iso>" } },
+  "own":        { "<owner>/<repo>#<num>": { "sha": "<head sha>", "base": "<origin/master sha>", "action": "merged-master|needs-you|skipped-env", "files": ["<conflicted paths>"], "at": "<iso>" } }
 }
 ```
+
+`own` is Step 6g's memory for source C. Add the key if an older state file
+lacks it.
 
 Keys are owner-qualified, so `kasadev/css-api#136` and `gabor-kasa/jira#64`
 coexist. Entries written before source B existed already carry the `kasadev/`
@@ -120,6 +128,23 @@ canonical `dependabot[bot]` login, so classify on that, never on this listing.
 They can't overlap today, but don't list a PR twice if that ever changes. The
 Step 7 accounting count is the size of that union, source A's `total_count`
 **plus** the source B PRs, not A alone.
+
+**Source C. Gabor's own open PRs, for conflict resolution only.** Nobody
+requests Gabor as a reviewer on his own PRs, so A never sees them, and B only
+covers `jira`. Without this source a conflicted PR of his sits `DIRTY` until
+he notices by hand. css-api#221 did exactly that on 2026-09-24: the only
+conflict was `package-lock.json`, and no step looked at it.
+
+```bash
+gh search prs --author=@me --state=open --json repository,number,title,isDraft,url --limit 50
+```
+
+Leave it unscoped by org so `gabor-kasa/jira` PRs are included. Drop drafts
+(he may be mid-rebase on one). Source C is a **separate pass**, not part of
+the review queue: its PRs are never `/review`ed by this step, never counted in
+the A + B accounting, and go only to Step 6g. A `jira` PR he authored can sit
+in both B (self-review) and C (conflict pass). That's fine, they do different
+things.
 
 ### Step 2 — Classify each PR
 
@@ -587,7 +612,8 @@ Step 5's skip gate re-attempts it every run (same self-healing as `skipped-env`)
 ### Step 6 — Failing dependabot: rebase, fix + verify + push, or comment
 
 Only ever do this for **dependabot** PRs requested **by name**. Never
-touch a human-authored PR's branch. Pick the **first** path that applies:
+touch a human-authored PR's branch here. Gabor's own conflicted PRs have
+their own, narrower path in Step 6g. Pick the **first** path that applies:
 
 - **6a-verify — A bot command is already outstanding →** if state shows
   `action:"rebase"`/`"recreate"` at this same sha, check whether it landed
@@ -985,6 +1011,108 @@ Leave Gabor's clone exactly as it was — verify with
 `git -C ../<repo> status --short` and `git -C ../<repo> branch --show-current`
 afterward; if either changed, note it loudly in the log.
 
+### Step 6g — Gabor's own PRs: resolve mechanical merge conflicts
+
+For every source C PR, fetch `mergeable_state` with the Step 2 command. GitHub
+computes it lazily, so `unknown` on the first call is normal: wait ~5 seconds
+and fetch once more. Still `unknown` → list it as "not computed yet" and move
+on. Only `dirty` qualifies. `behind` without a conflict is left alone, since
+nothing blocks the merge and a merge commit would only re-run CI.
+
+**Skip gate.** If `own[key]` has the same `sha` AND the same `base`
+(`git rev-parse origin/master` after fetching), this exact conflict was
+already handled. `merged-master` at that pair can't recur, because the push
+moved the sha. `needs-you` stays listed, not re-attempted, until either side
+moves. `skipped-env` is re-attempted every run, same as dependabot's.
+
+**Why merge, not rebase.** These branches are under human review. A rebase
+plus force-push rewrites commits that reviewers have already commented on,
+breaks GitHub's "changes since your last review" view, and leaves Gabor's
+local copy of the branch diverged. A merge commit is additive: a plain push,
+nothing rewritten, and his local branch fast-forwards. kasadev repos
+squash-merge (css-api allows only squash, checked 2026-09-24), so the merge
+commit never reaches master history anyway.
+
+**Procedure.** No local clone at `../<repo>` → list as needs-you ("no local
+clone") and stop. Otherwise, in a throwaway worktree. The local branch gets its own name
+(`pr-own-<num>`), never `<headRef>`: Gabor often has the PR's branch checked
+out in `../<repo>` (css-api#221's was, on 2026-09-24), and git refuses a
+second worktree on a checked-out branch. Tracking `origin/<headRef>` keeps the
+push a plain fast-forward:
+
+```bash
+git -C ../<repo> fetch origin master <headRef>
+git -C ../<repo> worktree add -f /tmp/pr-own-<repo>-<num> -B pr-own-<num> origin/<headRef>
+cd /tmp/pr-own-<repo>-<num>
+git merge --no-edit origin/master     # exits non-zero on conflict; that's expected
+git diff --name-only --diff-filter=U  # the conflicted paths
+```
+
+Resolve **only** when every conflicted path is mechanical. In a merge,
+`--ours` is the PR branch and `--theirs` is master.
+
+- **Lockfile** (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`): never
+  hand-merge. `git checkout --theirs <lockfile>`, then run a fresh install
+  (`npm install` / `yarn install` / `pnpm install`) once every `package.json`
+  is reconciled, so the lockfile is regenerated from the merged manifests.
+- **`package.json` dependency stanzas** (any workspace): the Step 6-resolve
+  rules. Keep both sides' changes, higher semver where the same package
+  differs. A conflict outside `dependencies` / `devDependencies` /
+  `peerDependencies` / `optionalDependencies` is not mechanical.
+- **`CHANGELOG.md` / `client/CHANGELOG.md`**: take master's released sections
+  verbatim, then keep the PR's own entry in an `## [Unreleased-…]` section as
+  the first release section, directly below the template block. The trap:
+  master's release-it run may have turned an `Unreleased` header into a dated
+  version since the branch was cut, and the PR's lines must not end up inside
+  that released version. Keep the template block intact (6c-ii).
+
+**Bail** if any conflicted path is something else (`.ts`, `.js`, config,
+tests, docs, workflows), or a `package.json` conflict is structural. Run
+`git merge --abort`, clean up (below), record
+`own[key] = {sha, base, action:"needs-you", files:[…]}`, and list the PR with
+the conflicted paths. **Post no PR comment.** It's his own PR: the log is where
+he reads it, and a bot note would only be noise for his reviewers.
+
+**Verify before pushing.** Run the full build + lint + test suite, the same
+bar as 6c-iii, using the repo's own scripts (css-api:
+`npm run build && npm run lint && npm test`, all nx `run-many`). A merge
+brings master's code into the branch, so a clean textual merge can still
+break the build. Never push on a partial check.
+
+- **Suite red** → treat as needs-you with the failing check named. Do not
+  start fixing source on his branch; that's his change, not a mechanical one.
+- **Install fails to authenticate** to the `@kasadev` registry → the 6-skip
+  rule: record `action:"skipped-env"`, list it, post nothing.
+- **All green** → finish the merge and push:
+
+```bash
+git add -A
+git commit -m "Merge origin/master into <headRef>
+
+Resolved conflicts automatically: <paths>. <lockfile regenerated with npm install.>
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+git push origin HEAD:<headRef>   # plain push, NEVER --force / --force-with-lease
+```
+
+A rejected push means Gabor pushed while the run worked. Leave it: record
+nothing, list it as "branch moved during the run", and the next run
+re-attempts it against the new sha. If a commit hook rejects the merge commit,
+never `--no-verify`. List it as needs-you with the hook's error.
+
+On success record `own[key] = {sha:<new head>, base, action:"merged-master",
+files:[…]}`. The new head will then fail the skip gate's sha match, which is
+correct: the next run re-checks it and finds it clean.
+
+**Clean up always**, even on bail:
+
+```bash
+git -C ../<repo> worktree remove --force /tmp/pr-own-<repo>-<num>
+git -C ../<repo> branch -D pr-own-<num> 2>/dev/null
+```
+
+Then confirm Gabor's clone is untouched, the same 6f check.
+
 ### Step 7 — Write the log + persist state
 
 **Output contract — emit the report once, then stop.** The run's stdout IS the
@@ -1109,6 +1237,15 @@ ones>. Branch is `<mergeable_state>`.
 ## ✏️ Drafts (skipped)
 - <repo>#<num> <title> by <author> <url>
 
+## 🔀 Your PRs — merge conflicts (source C, not in the queue count)
+<one line first: "<N> of your open PRs checked · <K> conflicted">
+### ✅ Resolved and pushed (pull before you keep working on the branch)
+- <repo>#<num> <title> — merged master, resolved <paths>; full suite green. <url>
+### ✋ Needs you
+- <repo>#<num> <title> — <conflict in <paths> (not mechanical) | suite red after merge: <check> | no local clone | hook rejected: <error>>. <url>
+### ⏭️ Skipped
+- <repo>#<num> <title> — <npm auth failed | branch moved during the run | mergeable_state not computed yet>. <url>
+
 ## Outcome
 - **Status:** <success | failure>
 - **Severity:** <ok | attention | failure>
@@ -1118,7 +1255,7 @@ ones>. Branch is `<mergeable_state>`.
 
 Then write the updated state object back to `logs/pr-review-state.json`.
 Prune entries for PRs no longer in today's open queue so the file
-doesn't grow forever.
+doesn't grow forever. Prune `own` against source C's list the same way.
 
 ### Step 8 — Severity + Notification
 
@@ -1134,7 +1271,9 @@ Severity:
   bump came back **⚠️ review before merge**
   (a breaking change touches what the repo uses), or ≥1 safe-to-merge PR is
   waiting. (A major/group bump whose Step 5i verdict is **✅ safe to merge**
-  counts as a safe-to-merge PR waiting.) (The normal weekday state.)
+  counts as a safe-to-merge PR waiting.) Also ≥1 of Gabor's own PRs was
+  resolved and pushed (Step 6g; his local branch is now behind), or went
+  needs-you at a sha/base pair not reported before. (The normal weekday state.)
 - `ok` — nothing actionable: no human PRs needing review, no failing
   dependabot, nothing safe-to-merge waiting (only group-assigned /
   already-reviewed / pending / auto-removed-opt-out / still-open-from-earlier
@@ -1418,6 +1557,13 @@ gathers candidates and accepts the first that actually carries `<new>`:
   plus the bare `@dependabot rebase` / `@dependabot recreate` bot command
   (Step 6a) which is posted **without** the marker so dependabot can parse
   it.
+- **PRE-AUTHORIZED: merging `master` into Gabor's own conflicted PRs**
+  (source C, Step 6g), `author == gabor-kasa` only: `git fetch`,
+  `git worktree add`/`remove`, `git merge origin/master`, resolving
+  lockfile / `package.json` dependency-stanza / changelog conflicts,
+  package-manager `install`, build/lint/test, `git commit`, and a **plain**
+  `git push origin HEAD:<headRef>` to that PR's own branch once the full
+  suite is green. No force-push, no source edits, no PR comments.
 - **Spawning `claude -p`** in `../<repo>` for the human-PR `/review` is
   the core mechanic.
 
@@ -1428,7 +1574,8 @@ gathers candidates and accepts the first that actually carries `<new>`:
   **any reviewer other than `gabor-kasa` himself**. Removing Gabor from a PR
   is allowed ONLY in a *reviewer opt-out repo* (Instructions intro);
   everywhere else, group-assigned PRs are listed-and-excluded, not removed.
-- Pushing to any non-dependabot branch, or to `master`/`main`/`dev`. In
+- Pushing to any non-dependabot branch other than a Step 6g own-PR branch,
+  or to `master`/`main`/`dev`. In
   `gabor-kasa/jira` that is doubly true: `deploy-production.yml` deploys to
   production on every push to `master`.
 - Posting review output of human-authored PRs to GitHub — that stays in
@@ -1438,7 +1585,9 @@ gathers candidates and accepts the first that actually carries `<new>`:
   green typecheck alone is never enough — run the whole suite.
 - Removing or rewriting the `client/CHANGELOG.md` template block, ever.
 - Touching a **human-authored** PR's branch (source fixes are for
-  dependabot-by-name branches only).
+  dependabot-by-name branches only). The one exception is Step 6g's
+  mechanical merge of `master` into a PR **Gabor authored**. Never another
+  person's PR, never a force-push, never a source edit to make it compile.
 - Posting a comment whose substance is just that the run env couldn't
   authenticate / install (npm not logged in for `@kasadev` packages) — skip
   the PR and log it internally instead (Step 6-skip).
