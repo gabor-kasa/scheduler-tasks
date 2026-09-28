@@ -48,8 +48,16 @@ fire at any hour too. Gabor asked for 9 to 5 and meant it, so check the
 wall clock before doing anything else:
 
 ```bash
-date +"%u %H%M"    # day-of-week 1-7, then 24h local time
+TZ=Europe/Budapest date +"%u %H%M"    # day-of-week 1-7, then 24h Budapest time
 ```
+
+Always pass `TZ=Europe/Budapest`. Never use a bare `date`, and do not
+"correct" the result against the system timezone. The Mac follows its
+location, so a bare `date` returns whatever zone it is sitting in. From
+2026-09-20 to 2026-09-28 it was on America/New_York. The guard read 14:00
+on a run that fired at 20:00 Budapest time and let it through, so the
+watch ran on New York hours all week. The window is Budapest working
+hours wherever the machine is.
 
 If the day is 6 or 7, or the time is outside `0900`-`1659`, **stop there**:
 
