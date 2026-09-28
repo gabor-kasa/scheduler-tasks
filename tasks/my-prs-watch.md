@@ -27,9 +27,9 @@ once-a-day 06:30 digest with auto-reviews. This task is the daytime banner:
 it runs every 30 minutes through the working day and says "somebody is
 waiting on you" within half an hour of it becoming true.
 
-GitHub login is `gabor-kasa`, work org `kasadev`, local timezone
-Europe/Budapest. **Read-only run.** Never post a comment, submit a review,
-merge, close, assign, or push. Nothing in this task mutates GitHub.
+GitHub login is `gabor-kasa`, work org `kasadev`. Local time is the
+Mac's system timezone, wherever Gabor is (Step 0). **Read-only run.**
+Never post a comment, submit a review, merge, close, assign, or push. Nothing in this task mutates GitHub.
 
 The whole value of this task is that a banner means something happened
 **that somebody else did**. Six outbound signals (Step 4) and three inbound
@@ -48,16 +48,16 @@ fire at any hour too. Gabor asked for 9 to 5 and meant it, so check the
 wall clock before doing anything else:
 
 ```bash
-TZ=Europe/Budapest date +"%u %H%M"    # day-of-week 1-7, then 24h Budapest time
+date +"%u %H%M"    # day-of-week 1-7, then 24h local time
 ```
 
-Always pass `TZ=Europe/Budapest`. Never use a bare `date`, and do not
-"correct" the result against the system timezone. The Mac follows its
-location, so a bare `date` returns whatever zone it is sitting in. From
-2026-09-20 to 2026-09-28 it was on America/New_York. The guard read 14:00
-on a run that fired at 20:00 Budapest time and let it through, so the
-watch ran on New York hours all week. The window is Budapest working
-hours wherever the machine is.
+Use the bare `date` and trust it. Do not force `TZ=Europe/Budapest` or
+"correct" the result against Budapest. The Mac sets its timezone from its
+location, and the app fires the cron in that same zone, so the schedule and
+this guard always agree. Working hours follow Gabor: from 2026-09-20 to
+2026-09-28 he was in New York, the Mac was on America/New_York, and the
+watch correctly ran New York 9 to 5. A non-Budapest system timezone is not
+a bug. Do not skip, flag, or raise severity over it.
 
 If the day is 6 or 7, or the time is outside `0900`-`1659`, **stop there**:
 
@@ -537,8 +537,8 @@ buried under review requests for other people's work.
 The gap this fills is real. kontrol-ui#3044 was approved by tamas-kasa on
 2026-09-07 and sat mergeable for two days without him noticing.
 
-Cadence is 9:00 to 16:30 local, Mondays to Fridays, 16 runs a day. Nothing
-fires outside working hours by design. The tradeoff: a reviewer who acts at
+Cadence is 9:00 to 16:30 local time (the Mac's timezone), Mondays to
+Fridays, 16 runs a day. Nothing fires outside working hours by design. The tradeoff: a reviewer who acts at
 16:45 surfaces at 09:00 the next morning.
 
 This is still polling, just done by the Mac instead of by Gabor. Genuine
