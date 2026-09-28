@@ -421,55 +421,71 @@ The `## Notification` block, or `## Outcome` when there is no notification,
 is the **last thing in the output**. Nothing follows it. Put any execution
 commentary *before* the `# My open PRs` heading.
 
+**Order the report by what Gabor has to do, not by where a PR came from.**
+A run usually carries one signal among 20+ quiet PRs. That signal goes in
+the first section, which merges outbound signals (Step 4) and inbound
+signals (Step 4b). Every signal that fired this run appears in it, and
+nothing else does. Everything with no action lives below the
+`## For reference` divider, one line per PR. Never lead any section, the
+headline, or the Outcome summary with a non-event ("no outbound
+activity", "0 approved"). Say what happened.
+
 Every PR from Step 2 and Step 4b appears exactly once across the sections. "No change"
 is a reason to write a one-line entry, never to omit one. Keep empty
-headings with `_None._` so the shape is stable run to run.
+headings with `_None._` so the shape is stable run to run, except the
+first section, which says `_Nothing needs you._` when empty.
 
 ```
 # My open PRs — <TODAY local> <HH:MM>
 
-<headline, counts derived from the sections below, e.g.
- "7 open · 1 approved · 1 new comment · 1 Devin review · 4 quiet · 1 draft
-  · reviewing: 1 new request · 1 question · 5 waiting on you">
+<one sentence naming what needs Gabor, e.g. "1 thing needs you: norbertp-kasa
+ re-requested your review on css-api#220." or "Nothing needs you.">
 
-## 🔔 New since last run
-### <repo>#<num> — <title>
-- <signal>: <who did what, and when>
+## 🔔 Needs you now
+### <repo>#<num> — <title> (<yours | by <author>>)
+- **Do:** <the concrete action, e.g. "re-review", "answer <who>'s question",
+  "address changes requested by <who>", "merge — approved by <who>">
+- <signal>: <who did what, and when; for a question, quote its first ~100
+  chars>. <one line of caveat if the signal looks doubtful, e.g. same
+  timestamp as your own review>
 - <url>
 
-## 😴 Quiet — no change since last run
-- <repo>#<num> — <title> · waiting <N>d on <reviewers> · <decision>
-
-## 👀 Waiting on your review — new since last run
-### <repo>#<num> — <title> (by <author>)
-- <review_requested | re_review | question>: <who, what, when; for a
-  question, quote its first ~100 chars>
-- <url>
-
-## 👀 Waiting on your review — standing
+## 👀 Still waiting on your review (already bannered)
 - <repo>#<num> — <title> (by <author>) · <why it waits on you: requested
   <N>d ago / pushed since your changes-requested / unanswered question from
-  <who>> · already bannered
+  <who>>
 
-## 💤 Reviewing — nothing waiting on you
-- <repo>#<num> — <title> · <e.g. you approved, no new request>
+---
 
-## 🙋 Your own actions (logged, never bannered)
+## For reference (no action)
+
+### 😴 Your PRs waiting on others
+- <repo>#<num> — <title> · waiting <N>d on <reviewers> · <decision>
+
+### 💤 Reviewing, nothing on you
+- <repo>#<num> — <title> (by <author>) · <e.g. you approved, no new request>
+
+### 🙋 Your own actions (never bannered)
 - <repo>#<num> — <title> · merged by you at <time>
 
-## ✏️ Drafts (excluded)
+### ✏️ Drafts (excluded)
 - <repo>#<num> — <title>
+
+<counts line, derived from the sections above, e.g. "10 open · 7 waiting
+ on others · 3 drafts · reviewing 11 · 2 standing on you">
 
 ## Outcome
 - **Status:** <success | failure>
 - **Severity:** <ok | attention | failure>
 - **Finished:** <ISO timestamp with local offset>
-- **Summary:** <one line with the counts>
+- **Summary:** <lead with the item(s) in "Needs you now", e.g.
+  "norbertp-kasa re-requested your review on css-api#220.">. Mention
+  suppressed own actions after that, if at all.
 ```
 
-In the Quiet section, show how long each PR has been waiting and on whom
-(`reviewRequests`, plus `assignees` if set). That standing list is the
-thing worth glancing at, even though it never triggers a banner.
+In "Your PRs waiting on others", show how long each PR has been waiting and
+on whom (`reviewRequests`, plus `assignees` if set). It never triggers a
+banner, and it stays below the divider so it never competes with a signal.
 
 Then write the updated state to `logs/my-prs-state.json`.
 
