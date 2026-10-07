@@ -40,14 +40,18 @@ Use only the Gmail MCP tools (`list_labels`, `create_label`,
 
 Call `list_labels`. For each rule, find the label by display name. If it
 is missing, `create_label` with that display name. Keep each label's
-**ID**: Gmail search and `label_message` take IDs, not names.
+**ID** for `label_message`. Search is different: `label:<ID>` and
+`-label:<ID>` do NOT work in `search_threads` (verified 2026-10-07: the
+exclusion returned already-labeled threads). In search queries use the
+label **name with `/` replaced by `-`**, e.g. `scheduler-fwd-arcgaborbot`
+(verified: `-label:scheduler-fwd-arcgaborbot` correctly excluded them).
 
 ### Step 2 — Find candidates
 
 For each rule, `search_threads` with:
 
 ```
-<rule match> -label:<label id> newer_than:3d -in:sent -in:trash -in:spam
+<rule match> -label:<label name with / as -> newer_than:3d -in:sent -in:trash -in:spam
 ```
 
 Page through all results (`pageSize` 50, follow `pageToken`). The
@@ -57,7 +61,9 @@ widen it.
 ### Step 3 — Pick the messages, not the threads
 
 A thread matches if any one message in it matches, so a thread can hold
-matching and non-matching messages. For each candidate thread, call
+matching and non-matching messages. After a forward, the sent copy joins
+the original's thread, so judge messages one by one and skip your own
+sent messages. For each candidate thread, call
 `get_thread` and judge **each message** against the rule:
 
 - Rule 1: the message was addressed to tech-craftsmanship@kasa.com (To
