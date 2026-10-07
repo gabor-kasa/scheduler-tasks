@@ -5,8 +5,8 @@ title: Forward matching emails, once each
 model: claude-haiku-5-5
 effort: low
 type: recurring
-schedule: "5 * * * *"
-next_run: 2026-10-07T21:05:00+02:00
+schedule: "5 7 * * *"
+next_run: 2026-10-08T07:05:00+02:00
 created: 2026-10-07T20:25:00+02:00
 status: active
 ---
@@ -82,7 +82,7 @@ For each selected message, in this order:
    earlier run. Apply the label, count it as `already-forwarded`, and
    do **not** forward again. If the check itself errors, skip the
    message this run and count it as `skipped-unverified`. A missed
-   forward gets retried next hour. A duplicate cannot be taken back.
+   forward gets retried on the next daily run. A duplicate cannot be taken back.
 2. `forward` with `messageId` and `to: [<destination>]`. No cc or bcc.
    Leave `forwardText` empty so the forward reads as the original.
 3. Immediately `label_message` with the rule's label ID. If the label
