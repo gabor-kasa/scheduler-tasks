@@ -2,6 +2,8 @@
 id: email-forwarder
 icon: arrowshape.turn.up.right
 title: Forward matching emails, once each
+model: claude-haiku-5-5
+effort: low
 type: recurring
 schedule: "5 * * * *"
 next_run: 2026-10-07T21:05:00+02:00
