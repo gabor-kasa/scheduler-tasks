@@ -43,10 +43,12 @@ Keep only events where:
 Distinguish carefully:
 
 - `[Hospitality] Grooming` and `[Hospitality] Tech Debt Grooming` are
-  **different** events — match the full summary, not a substring.
+  **different** events — match the full summary, not a substring. Only Tech
+  Debt Grooming is audited (Rule C); `[Hospitality] Grooming` is no longer a
+  regular meeting and is ignored (see Rule B, retired).
 - A **planning event** has the exact summary
   `[Hospitality] Review + Retro + Planning`. Match the full string, not a
-  substring. This is the anchor for Rules A/B/C/D below.
+  substring. This is the anchor for Rules A/C/D below.
 - Standup event summary is `[Hospitality] Standup`.
 
 ### Step 3 — Convert times explicitly
@@ -105,7 +107,8 @@ trustworthy.
 
 ### Step 4 — Check rules
 
-After conversion, audit against these four rules. "Planning event" means
+After conversion, audit against these three rules (A, C, D; B is retired
+and keeps its letter so older logs stay comparable). "Planning event" means
 an event whose summary is exactly `[Hospitality] Review + Retro + Planning`
 (see Step 2).
 
@@ -128,18 +131,19 @@ For each weekday between NOW and NOW+28d:
 - Otherwise, there must be exactly one `[Hospitality] Standup` event that
   day. If missing → violation.
 
-**Rule B — Grooming on the Thursday before planning.**
+**Rule B — retired 2026-10-07.**
 
-For each planning event:
-
-- Compute the Thursday immediately before that planning date (in
-  Europe/Budapest). A `[Hospitality] Grooming` event must exist on that
-  Thursday. If missing, on a wrong day, or duplicated → violation.
+The Hospitality team no longer holds regular Thursday Grooming sessions.
+Do not check for `[Hospitality] Grooming`, and do not report its presence,
+absence or day as a violation. Never emit a `B:` line.
 
 **Rule C — Tech Debt Grooming on the Wednesday before planning.**
 
-Same as Rule B but for `[Hospitality] Tech Debt Grooming` on the Wednesday
-immediately before each planning date.
+For each planning event:
+
+- Compute the Wednesday immediately before that planning date (in
+  Europe/Budapest). A `[Hospitality] Tech Debt Grooming` event must exist on
+  that Wednesday. If missing, on a wrong day, or duplicated → violation.
 
 **Rule D — Planning must be on a Monday, except when that Monday is a Hungarian public holiday.**
 
@@ -267,13 +271,14 @@ The audit is read-only (no PRE-AUTHORIZED actions needed) — it only calls
 violation seems easy to auto-fix, still just report it.
 
 Why these rules exist: Sprint Planning supersedes Standup, so we hold the
-standup. The Thursday before is when product grooming happens (so the team
-is ready for planning); the Wednesday before is when engineering grooms
-the tech debt backlog. Violations usually mean someone moved a meeting and
-broke the rhythm.
+standup. The Wednesday before is when engineering grooms the tech debt
+backlog. Until 2026-10-07 there was also product grooming on the Thursday
+before (old Rule B); the team dropped it as a regular meeting.
+Violations usually mean someone moved a meeting and broke the rhythm.
 
 Calendar event differences worth knowing:
-- `[Hospitality] Grooming` — product/story grooming, Thursdays
+- `[Hospitality] Grooming` — product/story grooming. No longer a regular
+  Thursday meeting as of 2026-10-07; not audited.
 - `[Hospitality] Tech Debt Grooming` — engineering tech debt grooming,
-  Wednesdays
-- These are different cadences and different attendee sets. Don't conflate.
+  Wednesdays. Still audited by Rule C.
+- Different events with different attendee sets. Don't conflate.
