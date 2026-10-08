@@ -4,6 +4,7 @@ icon: arrowshape.turn.up.right
 title: Forward matching emails, once each
 model: claude-haiku-5-5
 effort: low
+quiet: true
 type: recurring
 schedule: "5 7 * * *"
 next_run: 2026-10-08T07:05:00+02:00
@@ -135,14 +136,30 @@ enough.
 - `failure`: Gmail calls errored and no rule could be processed. Include
   the error text.
 
-No `## Notification` block on `ok`. On `attention` or `failure` add:
+This task is `quiet: true`. The app deletes an `ok` log that has no
+`## Notification` block, so a run that did nothing leaves no trace. Use
+the Notification block to keep the runs worth reading:
 
-```
-## Notification
+- Nothing forwarded, nothing labeled, severity `ok`: no Notification
+  block. The log is discarded.
+- At least one message forwarded or labeled (including
+  `already-forwarded`), severity `ok`: add
 
-- title: Email forwarder
-- body: <one line: what needs a look>
-```
+  ```
+  ## Notification
+
+  - title: Email forwarder
+  - body: Forwarded <n> message(s): <rule 1 count> to arcgaborbot, <rule 2 count> to arcpaperless
+  ```
+
+- `attention` or `failure`: add
+
+  ```
+  ## Notification
+
+  - title: Email forwarder
+  - body: <one line: what needs a look>
+  ```
 
 ## Context
 
