@@ -351,8 +351,18 @@ major/group bump keeps the bare listing.
 Skip the **work** if `dependabot["<owner>/<repo>#<num>"].sha == head` AND its
 prior `action` was `commented`, `pushed`, `pushed-source`, `safe`, or
 `analyzed`, **AND the PR's current CI is not red** (from the `gh pr checks` at the top of this
-step, no required check is `fail`) — already handled at this exact SHA, so
-don't re-analyse it, don't re-comment, don't re-push.
+step, no required check is `fail`) **AND its `mergeable_state` is not `dirty`**
+— already handled at this exact SHA, so don't re-analyse it, don't re-comment,
+don't re-push.
+
+**A conflicted PR is never "handled" either.** When master moves after the
+PR was handled, the head sha does not change (it is often the task's own push)
+and CI stays green (the checks ran before master moved), so without this
+condition a `dirty` PR is skipped every run and never reaches Step 6-resolve.
+Route a `dirty` PR to **6-resolve** (clone exists) or **6a** (no clone)
+whatever its stored action. This cannot loop: a successful resolve
+force-pushes a new sha, and the 6d / 6a-verify guards still block a duplicate
+comment or bot command at the same sha.
 
 **Skipping the work is never skipping the listing.** The PR is still open and
 still waiting on Gabor, so it must still appear in the report — one line under
