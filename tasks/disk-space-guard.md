@@ -3,7 +3,7 @@ id: disk-space-guard
 icon: internaldrive
 title: Disk space guard — catch silent app kills before they bite
 type: recurring
-model: claude-haiku-4-5
+model: claude-haiku-5-5
 effort: low
 schedule: "0 9,17 * * *"
 created: 2026-08-11T17:29:27+02:00

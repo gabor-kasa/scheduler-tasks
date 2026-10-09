@@ -23,8 +23,8 @@ The founding example is the `delegate-background` skill: widely known, already
 available, but missed for months. Catching that class of thing — ideally
 *before* it's old news — is the whole point of this task.
 
-This is **not** a usage or cost report. Do **not** grade model-tier choices,
-token spend, session length, or Bash-vs-Read ratios — re-flagging mechanical
+This is **not** a usage or cost report. Do **not** grade model-tier choices
+(opus vs sonnet vs haiku), token spend, session length, or Bash-vs-Read ratios — re-flagging mechanical
 knobs is noise Gabor can't act on. If a mechanical metric ever matters, it's
 only as *evidence that some capability would help*, never as a finding on its
 own.
@@ -68,6 +68,29 @@ Compare "used" (Step 1) against "available":
 
 Keep the bar high: only surface unused things that would plausibly help *his*
 actual work, grounded in the repos and workflows you saw in Step 1.
+
+### Step 2b — Are the scheduled tasks on the latest model generation?
+
+The one model check this task does. It is about **generation, not tier**: a task
+pinned to haiku stays on haiku, it just needs the newest haiku.
+
+1. Get the current model IDs from a source you can verify this run: the
+   `claude-api` skill's model table if it is in your skill list, otherwise
+   `WebSearch`/`WebFetch` on Anthropic's models overview. Do not rely on IDs
+   remembered from training. If you cannot verify them, say so and skip this step.
+2. Collect what the tasks use: the `model:` line of every `tasks/*.md` with
+   `status: active`, plus the app default in
+   `../scheduler/app/Sources/TaskRunner.swift` (`defaultModel`).
+3. Flag any pin or default that is an older generation than the newest model of
+   the same tier. Unpinned tasks follow `defaultModel`, so list them under it
+   rather than one by one.
+4. Also flag any ID that is not a valid `claude --model` value (typo, retired model).
+
+A stale pin is a finding of its own. It does not count toward the three-item cap
+in Step 4 and is not subject to the no-repeat rule, because it stays true until
+fixed. Report it under `## Model currency` with the task, current ID, newest ID,
+and the one-line edit. Do not edit the task files yourself. Set `Severity:
+attention` if anything is stale.
 
 ### Step 3 — What's new in the wider world? (web, changelog-anchored)
 
@@ -139,6 +162,9 @@ Append:
 ## What you already use
 <terse: notable skills/tools/features exercised in the last 30 days — 2-4 bullets, context for the recommendations>
 
+## Model currency
+<from Step 2b: "all current" or a table of task | pinned | newest | edit; or "unverified, skipped">
+
 ## Worth adopting this week
 1. **<capability>** — what it is. Why it's relevant to <repo/workflow>. Try this: <concrete action>.
 2. ...
@@ -156,7 +182,7 @@ Append:
 
 Severity:
 
-- `attention` — you surfaced at least one genuinely new or genuinely-unused
+- `attention` — Step 2b found a stale or invalid model ID, or you surfaced at least one genuinely new or genuinely-unused
   high-value capability worth trying. The default for a productive run.
 - `ok` — nothing new shipped and nothing notable sitting unused. No notification.
 - `failure` — `~/.claude/projects/` had no transcripts at all (no local basis).

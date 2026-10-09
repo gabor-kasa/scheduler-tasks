@@ -3,7 +3,7 @@ id: pr-review-queue
 icon: arrow.triangle.pull
 title: Morning PR review queue — triage, dependabot, /review
 type: recurring
-model: claude-opus-5
+model: claude-opus-5-5
 effort: high
 summary: bottom
 schedule: "30 6 * * 1-5"

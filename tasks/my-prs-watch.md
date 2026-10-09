@@ -3,7 +3,7 @@ id: my-prs-watch
 icon: bell.badge
 title: My PRs — notify when a reviewer acts or a review waits on me
 type: recurring
-model: claude-sonnet-5
+model: claude-sonnet-5-5
 effort: low
 quiet: true
 summary: bottom
