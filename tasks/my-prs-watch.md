@@ -6,6 +6,7 @@ type: recurring
 model: claude-sonnet-5
 effort: low
 quiet: true
+summary: bottom
 schedule: "0,30 9-16 * * 1-5"
 next_run: 2026-09-09T14:00:00+02:00
 created: 2026-09-09T13:50:00+02:00
@@ -161,7 +162,7 @@ silently broken watch is worse than no watch.
 ### Step 3 — Classify each PR
 
 **Drafts are excluded entirely.** A draft is waiting on Gabor, not on a
-reviewer. List it in the report under Drafts and compute no signals for it.
+reviewer. List it in the report under Not yours and compute no signals for it.
 
 Activity falls into three buckets, counted separately.
 
@@ -242,8 +243,8 @@ Measured on 2026-09-21: of the last five merge banners, three were his own
 clicks (github-workflows#100 on 09-16, css-debugger#97 on 09-18,
 add-on-service#732 on 09-21) and only two were somebody else's
 (ai-developer-tools#616 and #595, both merged by andrew-kasa). Suppress the
-signal, still prune the entry per Step 5, and log the closure under
-**Your own actions** in the report so the suppression is visible rather than
+signal, still prune the entry per Step 5, and log the closure as a
+`None (merged by you <time>)` row in **Yours** so the suppression is visible rather than
 silent.
 
 A PR **closed without merging** is the same case, but `mergedBy` is null and
@@ -273,8 +274,8 @@ and there is nothing to filter. Do not add machinery for it.
 **A signal fires once per sha.** Store every fired signal in the PR's
 `notified` array and never re-fire one already listed there. A PR that has
 been sitting approved for two days must stay silent on all 34 runs after
-the first, exactly as `pr-review-queue.md` keeps its "still open from
-earlier runs" section silent. Re-bannering a known state is how a
+the first, exactly as `pr-review-queue.md` keeps its still-open-from-earlier-runs
+rows silent. Re-bannering a known state is how a
 notification becomes noise.
 
 **A new sha resets `notified` to `[]`.** Gabor pushed, so the review cycle
@@ -419,73 +420,90 @@ exactly once as your final output, then end the run. Do not redraft or
 re-print it. A repeated report makes the app fire the banner several times.
 The `## Notification` block, or `## Outcome` when there is no notification,
 is the **last thing in the output**. Nothing follows it. Put any execution
-commentary *before* the `# My open PRs` heading.
+commentary *before* the `# My PRs` heading.
 
-**Order the report by what Gabor has to do, not by where a PR came from.**
-A run usually carries one signal among 20+ quiet PRs. That signal goes in
-the first section, which merges outbound signals (Step 4) and inbound
-signals (Step 4b). Every signal that fired this run appears in it, and
-nothing else does. Everything with no action lives below the
-`## For reference` divider, one line per PR. Never lead any section, the
-headline, or the Outcome summary with a non-event ("no outbound
-activity", "0 approved"). Say what happened.
+**Report format: one row per PR, one verb per row.** Same shape as
+`pr-review-queue`, so the two read alike. A run usually carries one signal
+among 20+ quiet PRs; the format makes that one row easy to find.
 
-Every PR from Step 2 and Step 4b appears exactly once across the sections. "No change"
-is a reason to write a one-line entry, never to omit one. Keep empty
-headings with `_None._` so the shape is stable run to run, except the
-first section, which says `_Nothing needs you._` when empty.
+Sections, in this order. Drop a section with no rows (no `_None._`
+placeholders):
+
+1. `## People`: other people's PRs where Gabor is requested **by name**
+   (Step 4b). **Always first**, because a colleague waiting on him matters
+   most.
+2. `## Yours`: his own non-draft open PRs (Steps 2 to 4), plus PRs that
+   closed this run.
+3. `## Not yours`: one line, not a table: PRs he sees only through a team,
+   and drafts (his or anyone's), each with its reason in parentheses.
+4. `## Details`: only for a row whose signal needs more than a cell, e.g. the
+   quoted question, or a caveat that the signal looks doubtful.
+
+The last column is exactly one verb, bolded when it asks something of him:
+
+| Verb | Use for |
+|---|---|
+| **Reply** | `question`: someone asked him something in a comment |
+| **Review** | `review_requested`, `re_review`, or a standing request he hasn't acted on |
+| **Fix** | `changes_requested` or `ci_red` on his own PR |
+| **Merge** | his own PR approved and green (`approved`) |
+| Wait | his own PR waiting on reviewers; a PR he reviewed with nothing new on him |
+| None | `closed` / merged, `new_comment` or `devin_review` that asks nothing, his own actions. Add the one thing to know, e.g. `None (merged by you 10:12)` |
+
+Within a table, sort rows by verb in the order above.
+
+**🆕 marks a signal that fired this run**, and nothing else does. Every 🆕
+row is a banner signal from Step 4 or 4b; a row without 🆕 is a standing
+state (e.g. a review request already bannered on an earlier run). The headline
+counts the 🆕 rows, so if there are none, nothing new happened.
+
+Every PR from Step 2 and Step 4b appears exactly once across the sections,
+including drafts that are also review requests (they go in Not yours only).
+"No change" is a reason for a row, never for omitting one.
+
+Keep cells short (a title cut to ~50 chars, a state of a few words) and escape
+a literal `|` inside a cell as `\|`. Anything longer goes in Details.
 
 ```
-# My open PRs — <TODAY local> <HH:MM>
+# My PRs · <weekday, Mon D> <HH:MM>
+**<one sentence naming the 🆕 rows, e.g. "craigminoff asked you about the Salto
+ path on guest-api#3037." or "Nothing new.">**
+<counts line, DERIVED from the tables: "<A> need you (<B> new) · <C> yours
+ waiting · <D> not yours">
 
-<one sentence naming what needs Gabor, e.g. "1 thing needs you: norbertp-kasa
- re-requested your review on css-api#220." or "Nothing needs you.">
+## People
+| PR | Author | State | You |
+|---|---|---|---|
+| 🆕 [<repo>#<num>](<url>) <title> | <author> | Asked you a question <time> | **Reply** |
+| [<repo>#<num>](<url>) <title> | <author> | Requested <N>d ago, not reviewed | **Review** |
+| [<repo>#<num>](<url>) <title> | <author> | You approved; pushed since, no re-request | Wait |
 
-## 🔔 Needs you now
-### <repo>#<num> — <title> (<yours | by <author>>)
-- **Do:** <the concrete action, e.g. "re-review", "answer <who>'s question",
-  "address changes requested by <who>", "merge — approved by <who>">
-- <signal>: <who did what, and when; for a question, quote its first ~100
-  chars>. <one line of caveat if the signal looks doubtful, e.g. same
-  timestamp as your own review>
-- <url>
+## Yours
+| PR | Waiting on | State | You |
+|---|---|---|---|
+| 🆕 [<repo>#<num>](<url>) <title> | <reviewers> | Approved by <who> | **Merge** |
+| [<repo>#<num>](<url>) <title> | <reviewers, or the first 2 + "+N"> | <N>d, REVIEW_REQUIRED, 1 CI check failing | Wait |
 
-## 👀 Still waiting on your review (already bannered)
-- <repo>#<num> — <title> (by <author>) · <why it waits on you: requested
-  <N>d ago / pushed since your changes-requested / unanswered question from
-  <who>>
+## Not yours
+<repo>#<num> (team only) · <repo>#<num> (draft) · <repo>#<num> (your draft)
 
----
-
-## For reference (no action)
-
-### 😴 Your PRs waiting on others
-- <repo>#<num> — <title> · waiting <N>d on <reviewers> · <decision>
-
-### 💤 Reviewing, nothing on you
-- <repo>#<num> — <title> (by <author>) · <e.g. you approved, no new request>
-
-### 🙋 Your own actions (never bannered)
-- <repo>#<num> — <title> · merged by you at <time>
-
-### ✏️ Drafts (excluded)
-- <repo>#<num> — <title>
-
-<counts line, derived from the sections above, e.g. "10 open · 7 waiting
- on others · 3 drafts · reviewing 11 · 2 standing on you">
+## Details
+### <repo>#<num>
+<signal: who did what, and when. For a question, quote its first ~100 chars.
+ One line of caveat if the signal looks doubtful, e.g. same timestamp as your
+ own review.>
 
 ## Outcome
 - **Status:** <success | failure>
 - **Severity:** <ok | attention | failure>
 - **Finished:** <ISO timestamp with local offset>
-- **Summary:** <lead with the item(s) in "Needs you now", e.g.
-  "norbertp-kasa re-requested your review on css-api#220.">. Mention
-  suppressed own actions after that, if at all.
+- **Summary:** <lead with the 🆕 item(s), e.g. "norbertp-kasa re-requested
+  your review on css-api#220.">. Mention suppressed own actions after that,
+  if at all.
 ```
 
-In "Your PRs waiting on others", show how long each PR has been waiting and
-on whom (`reviewRequests`, plus `assignees` if set). It never triggers a
-banner, and it stays below the divider so it never competes with a signal.
+Never lead the headline or the Outcome summary with a non-event ("no outbound
+activity", "0 approved"). Say what happened.
 
 Then write the updated state to `logs/my-prs-state.json`.
 
@@ -500,7 +518,7 @@ gh pr view <num> --repo <owner>/<repo> --json state,mergedAt,mergedBy
 Prune only on `MERGED` or `CLOSED`. Fire the `closed` signal on that same
 transition so the merge is reported rather than silently vanishing.
 **Unless `mergedBy` is `gabor-kasa`**, in which case prune quietly and write
-the closure into the **Your own actions** section instead. Pruning happens
+the closure as a `None (merged by you <time>)` row in **Yours** instead. Pruning happens
 either way; only the banner is suppressed. If the
 verify call itself fails, **keep the entry** and note it in the log. A stale
 entry costs one line in a JSON file; a wrongly pruned one costs the watch,
@@ -514,9 +532,9 @@ swallows whatever happened while it was missing.
 - `ok` — nothing fired. Silence is the success state.
 
 A run whose only event was one of Gabor's own actions is `ok`, not
-`attention`. Because `quiet: true` deletes `ok` logs, that run's **Your own
-actions** section disappears with it. That is intended: he merged it, he
-knows. The section earns its place on runs that also carry a real signal,
+`attention`. Because `quiet: true` deletes `ok` logs, that run's own-action
+row disappears with it. That is intended: he merged it, he
+knows. The row earns its place on runs that also carry a real signal,
 where it shows what was deliberately left out of the banner.
 
 On `attention` or `failure`, append exactly one block:
