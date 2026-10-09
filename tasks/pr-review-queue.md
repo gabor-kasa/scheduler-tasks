@@ -5,6 +5,7 @@ title: Morning PR review queue — triage, dependabot, /review
 type: recurring
 model: claude-opus-5
 effort: high
+summary: bottom
 schedule: "30 6 * * 1-5"
 created: 2026-05-29T18:00:00+02:00
 status: active
@@ -1130,13 +1131,13 @@ log: produce the report below a single time as your final output, then end the
 run. Don't regenerate, re-print, or "draft then redo" it — a repeated report
 triples the log and makes the app fire the desktop banner several times.
 
-- Exactly **one** `# PR review queue — <date>` report in the whole run.
+- Exactly **one** `# PR queue · <date>` report in the whole run.
 - Exactly **one** `## Outcome` block, and **at most one** `## Notification`
   block (Step 8). Once you've written either, never write it again.
 - The `## Notification` block (or the `## Outcome` block when there's no
   notification) is the **last thing** in the output. **Nothing follows it** —
   no execution narrative, no "cleaned worktree" notes, no `---` separators.
-  Put all execution/narrative commentary **before** the `# PR review queue`
+  Put all execution/narrative commentary **before** the `# PR queue`
   heading, never after the report. (A stray trailing narrative line after the
   Notification block is exactly what seeds the repeat loop — don't emit one.)
 - When the report ends, the run is done. Do not continue with further turns,
@@ -1155,13 +1156,13 @@ one-liner, never a reason to omit. Before emitting the report:
 3. If it doesn't reconcile, you have dropped a PR — go find it and list it.
    Never emit a report you know doesn't add up.
 
-Open the headline with the reconciliation — `<N> PRs in queue · …` — so the
+Open the headline with the reconciliation (`<N> PRs in queue · …`) so the
 arithmetic is visible to Gabor and a hole surfaces as a wrong number instead of
 a silent omission.
 
 **Headline and Summary counts are derived, never freehand.** Write the sections
 first, then count what is actually in them to build the headline and the
-`Summary:` line. Do not compose counts from memory as you go — they drift from
+`Summary:` line. Do not compose counts from memory as you go. They drift from
 what the sections actually contain.
 
 PR ids in the report: a bare `<repo>#<num>` for `kasadev` repos (the common
@@ -1169,92 +1170,121 @@ case, and what the template below shows), owner-qualified as
 `gabor-kasa/jira#<num>` for source B, so a personal-repo PR is never mistaken
 for an org one.
 
-Write the run log in this structure (omit a section's items but keep the
-heading with `_None._` if empty, for a stable shape):
+#### Report format: one row per PR, one verb per row
+
+Gabor reads this to answer one question per PR: what do I do with it? So the
+report is tables, one row per PR, and the last column is always exactly one
+verb from this set, bolded when it asks something of him:
+
+| Verb | Meaning |
+|---|---|
+| **Review** | Read the code: a review with findings, a review that failed, a too-large PR, a dependabot source-edit push, or an `@kasadev` bump whose verdict is ⚠️/❓ |
+| **Fix** | His hands on a branch: own-PR conflict that isn't mechanical, own-PR suite red, a run-env skip he has to handle |
+| **Decide** | A judgement call the run stopped short of (commented dependabot PR). Name the decision in the cell: `**Decide**: switch cdk.json to tsx?` |
+| **Approve** | Green, verified, needs his approval to merge (`kasadev` repos) |
+| **Merge** | Green, verified, he can merge it himself (`gabor-kasa/jira`, no approval needed) |
+| Wait | Nothing for him yet: CI running, dependabot asked to rebase, fix pushed and CI re-running, reviewed with no new commits, own PR blocked on someone else |
+| None | Done, informational. Add the one thing to know, e.g. `None (pull before you keep working)` |
+
+Sections, in this order. Drop a section with no rows (no `_None._`
+placeholders):
+
+1. `## People`: every human-authored by-name PR (source A by-name + source B
+   human PRs). **Always first**, because a colleague waiting on him matters
+   more than a bot.
+2. `## Yours`: source C, his own non-draft PRs (not in the queue count).
+3. `## Dependabot`: every by-name dependabot PR.
+4. `## Not yours`: one line, not a table: group-assigned, opt-out removals,
+   drafts, each with its reason in parentheses.
+5. `## Details`: long-form prose, only for rows whose verb needs context.
+
+Within a table, sort rows by verb in the order above (Review first, None last).
+
+**🆕 marks change.** Prefix the PR cell with 🆕 when the PR wasn't in the
+state file loaded at Step 0, or this run did something to it (reviewed it,
+pushed, commented, found a new conflict, saw a new sha). A row without 🆕 is
+one Gabor already saw yesterday in the same state, so he can skip it. Rows in
+the 🕓 still-open bucket never get 🆕.
+
+Keep cells short (a title cut to ~50 chars, a state of a few words) and escape
+a literal `|` inside a cell as `\|`. Anything longer goes in Details.
+
+**Where each Step 2-6g bucket lands.** Earlier steps name buckets by their old
+section labels. Map them like this:
+
+| Bucket (as named in earlier steps) | Section | Verb |
+|---|---|---|
+| ⚠️ Needs your review (reviewed, or review failed) | People | Review |
+| 📏 Too large to auto-review | People | Review |
+| 🔁 Previously reviewed, no new commits | People | Wait |
+| 🔄 Asked dependabot to rebase / ♻️ asked to recreate | Dependabot | Wait |
+| 🔧 Fixed automatically, lockfile/dep sync | Dependabot | Wait |
+| 🛠️ Fixed automatically, source edit | Dependabot | Review |
+| 💬 Commented, needs you | Dependabot | Decide |
+| ⏭️ Skipped, run-env limitation | Dependabot | Fix |
+| ✅ Safe to merge | Dependabot | Approve / Merge |
+| 🟡 Green, review changelog (✅ verdict or non-`@kasadev`) | Dependabot | Approve / Merge |
+| 🟡 Green, review changelog (⚠️ or ❓ verdict) | Dependabot | Review |
+| ⏳ CI still running | Dependabot | Wait |
+| 🕓 Still open from earlier runs | Dependabot | its original verb, no 🆕 |
+| 👥 Group-assigned / 🚫 Auto-removed myself / ✏️ Drafts | Not yours | |
+| 🔀 Own PR: resolved and pushed | Yours | None (pull before you keep working) |
+| 🔀 Own PR: needs you | Yours | Fix |
+| 🔀 Own PR: skipped, or blocked but clean | Yours | Wait |
+
+**What goes in Details.** One `### <repo>#<num>` per row that needs it:
+
+- **Review** rows from a successful inner review: `**What it does:**`,
+  `**Context:**`, `**Findings:**` (`[blocker]` / `[concern]` / `[nit]`), and
+  `<new commits since last review: <short sha> | first review>`.
+- **Review** rows from a failed review: why it failed, in two sentences.
+- Too-large rows: the size-gate figures, `**Where it lands:**` (3-5
+  directories with the most changed lines), the `mergeable_state`, and
+  `<first skip at this sha | unchanged since <at>>`.
+- **Decide** and **Fix** rows: the diagnosis and what the run did and didn't do.
+- Source-edit rows: what the edit changed.
+- An internal `@kasadev` major/group bump analysed **this run**: the full Step
+  5i block (`**Bump:**`, `**Breaking / behavioral:**`, `**Additive:**`,
+  `**This repo uses:**`, `**Verdict:**`, `<analysis comment posted to PR | log
+  only>`). An unchanged one from an earlier run gets no Details entry; its row
+  says `Approve (analysed <YYYY-MM-DD>)`.
+
+Rows with Approve/Merge on a plain patch, and every Wait/None row, get no
+Details entry. The table cell is enough.
+
+Write the run log in this structure:
 
 ```
-# PR review queue — <TODAY local>
+# PR queue · <weekday, Mon D>
+**<N> PRs in queue · <X> need you · <Y> ready to approve/merge · <Z> waiting · <W> not yours**
+<"need you" = Review + Fix + Decide rows; "ready" = Approve + Merge; "waiting" =
+ Wait + None. Counts DERIVED from the tables, queue rows only (Yours excluded).
+ N must equal X + Y + Z + W.>
 
-<headline — counts DERIVED from the sections below, opening with the queue
- reconciliation, e.g. "15 PRs in queue · 3 need your review · 1 too large to
- auto-review · 2 dependabot fixed · 1 commented · 4 safe to merge · 2 still
- open from earlier runs · 5 group-assigned (excluded) · 1 draft">
+## People
+| PR | Author | Size | State | You |
+|---|---|---|---|---|
+| 🆕 [<repo>#<num>](<url>) <title> | <author> | +<adds>/-<dels> | <a few words> | **Review** |
+| [<repo>#<num>](<url>) <title> | <author> | +<adds>/-<dels> | Reviewed <MMM D>, no new commits | Wait |
 
-## ⚠️ Needs your review
-### <repo>#<num> — <title>  ·  by <author>  ·  +<adds>/-<dels>, <files> files
-<url>
-**What it does:** <2–3 sentences>
-**Context:** <what Gabor should know — related tickets, blast radius, why now>
-**Findings:**
-- [blocker] …
-- [concern] …
-- [nit] …
-<new commits since last review: <short sha> | first review>
+## Yours
+<one line first: "<N> open PRs checked · <K> conflicted (<D> drafts skipped)">
+| PR | State | You |
+|---|---|---|
+| 🆕 [<repo>#<num>](<url>) <title> | <conflict in <file> (add/add \| content) \| suite red: <check> \| …> | **Fix** |
 
-## 📏 Too large to auto-review — read it yourself
-### <repo>#<num> — <title>  ·  by <author>  ·  +<adds>/-<dels>, <files> files
-<url>
-**Skipped:** over the Step 4 size gate (<50 files / 3000 changed lines>), so no
-review was attempted — <non-generated figures when they differ from the raw
-ones>. Branch is `<mergeable_state>`.
-**Where it lands:** <3–5 directories with the most changed lines>
-<first skip at this sha | unchanged since <at>>
+## Dependabot
+| PR | Bump | CI | You |
+|---|---|---|---|
+| 🆕 [<repo>#<num>](<url>) | <pkg> <old> → <new> <MAJOR?> \| group of <n> | 🔴/🟢/⏳ | **Decide**: <the decision> |
+| [<repo>#<num>](<url>) | group of <n> | 🟢 | **Approve** (analysed <YYYY-MM-DD>) |
 
-## 🔁 Previously reviewed — no new commits
-- <repo>#<num> <title> <url>
+## Not yours
+<repo>#<num> (<team> team) · <repo>#<num> (removed myself, opt-out) · <repo>#<num> (draft)
 
-## 🤖 Dependabot (by name)
-### 🔄 Asked dependabot to rebase (stale/conflicted branch)
-- <repo>#<num> <title> — <dirty|behind>. <url>
-### ♻️ Rebase refused → asked dependabot to recreate
-- <repo>#<num> <title> — bot couldn't rebase (branch edited by github-actions). <url>
-### 🔧 Fixed automatically (lockfile/dep sync pushed, CI re-running)
-- <repo>#<num> <title> — pushed: <one line>. <url>
-### 🛠️ Fixed automatically — source edit (review semantics before merging)
-- <repo>#<num> <title> — <MAJOR?> pushed source fix: <one line>; full build+lint+test green locally. <url>
-### 💬 Commented — needs you
-- <repo>#<num> <title> — <root-cause one-liner>. <url>
-### ⏭️ Skipped — couldn't verify locally (run-env limitation)
-- <repo>#<num> <title> — <failing check>; install of private @kasadev deps failed to authenticate (401/403/ENEEDAUTH from <registry>), no comment posted. <url>
-### ✅ Safe to merge (green, single patch/minor)
-- <repo>#<num> <title> <url>
-  <for an internal @kasadev bump: one-line digest, e.g. "adds optional `yieldType`; additive only">
-### 🟡 Green — review changelog (major or group bump)
-<for a NON-@kasadev major/group bump, the bare listing — dependabot's body has the notes:>
-- <repo>#<num> <title> <url>
-<for an internal @kasadev major/group bump, the full Step 5i block:>
-#### <repo>#<num> — <title>
-<url>
-**Bump:** `@kasadev/<pkg>` <old> → <new> (major | group) · CI green
-**Breaking / behavioral:** <bullets, or "None — all additive">
-**Additive:** <one line or bullets of the added:/fixed: highlights>
-**This repo uses:** <symbols/events, or "couldn't verify — no local clone">
-**Verdict:** <✅ safe to merge — no breaking change affects this repo | ⚠️ review before merge — `<symbol>` changed | ❓ inconclusive — <why> + compare link>
-<analysis comment posted to PR | log only>
-### ⏳ CI still running
-- <repo>#<num> <title> <url>
-### 🕓 Still open from earlier runs (already handled at this sha — no action taken)
-<every dependabot PR the Step 5 skip gate skipped. Green and still waiting on
- Gabor; listed so it can't go invisible, but NOT re-analysed and NOT re-pushed:>
-- <repo>#<num> <title> — <bump>; green, `<action>` on <YYYY-MM-DD>; <awaiting your approval | ready to merge>. <url>
-
-## 👥 Group-assigned via hospitality (excluded — not yours by name)
-- <repo>#<num> <title> by <author> <url>
-
-## 🚫 Auto-removed myself as reviewer (opt-out repos)
-- <repo>#<num> <title> by <author> — removed gabor-kasa (opted out of this repo). <url>
-
-## ✏️ Drafts (skipped)
-- <repo>#<num> <title> by <author> <url>
-
-## 🔀 Your PRs — merge conflicts (source C, not in the queue count)
-<one line first: "<N> of your open PRs checked · <K> conflicted">
-### ✅ Resolved and pushed (pull before you keep working on the branch)
-- <repo>#<num> <title> — merged master, resolved <paths>; full suite green. <url>
-### ✋ Needs you
-- <repo>#<num> <title> — <conflict in <paths> (not mechanical) | suite red after merge: <check> | no local clone | hook rejected: <error>>. <url>
-### ⏭️ Skipped
-- <repo>#<num> <title> — <npm auth failed | branch moved during the run | mergeable_state not computed yet>. <url>
+## Details
+### <repo>#<num>
+<per "What goes in Details" above>
 
 ## Outcome
 - **Status:** <success | failure>
@@ -1298,7 +1328,7 @@ in the report and silent in the notification until the sha moves.
 **🕓 Still open from earlier runs never bumps severity.** Those PRs were
 already surfaced on the day they were handled; re-firing a banner every
 morning until Gabor merges them would train him to ignore the banner. They
-stay **visible in the report** (that's the whole point of the section) and
+stay **visible in the report** (as rows without 🆕) and
 **silent in the notification** — same treatment as an opt-out removal. A PR
 only bumps severity on the run that *does* something to it.
 
@@ -1308,7 +1338,7 @@ If `attention` or `failure`, append a `## Notification` block:
 ## Notification
 
 - title: PR review queue
-- subtitle: <N review · M dependabot · K safe-to-merge>
+- subtitle: <X need you · Y ready to approve/merge>
 - body: <single most important item, ~90 chars. Prefer a source-edit
         auto-push (esp. a major — needs a semantics check before merge);
         else an internal @kasadev bump that came back ⚠️ review before merge;

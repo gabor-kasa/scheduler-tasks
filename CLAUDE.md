@@ -104,6 +104,15 @@ scroll. A task writes in working order (Execution → Report → Outcome) and
 never has to arrange the file itself. A log with no `## Report` section falls
 back to the older shape (Outcome first, everything else after).
 
+The app's log viewer goes one step further, for display only (the file keeps
+the shape above): the title and metadata bullets collapse into one status line
+under the task name (`success · Oct 9, 06:30–06:58 (28m) · model`), the
+`## Report` heading is dropped, and Outcome, Notification and the metadata move
+into a `## Run details` section just above `## Execution`. The Outcome
+`Summary:` stays on top as the first paragraph unless the task's frontmatter
+sets `summary: bottom`. Use that for a task whose Report already opens with the
+same counts.
+
 ## Pre-authorized mutations
 
 A scheduled run has **no user to approve actions**. If a task needs to
