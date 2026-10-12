@@ -7,7 +7,7 @@ model: claude-haiku-5-5
 effort: low
 schedule: "0 9,17 * * *"
 created: 2026-08-11T17:29:27+02:00
-status: active
+status: paused
 ---
 
 ## Instructions
