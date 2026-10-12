@@ -40,16 +40,18 @@ Keep only events where:
 - `status` is not `cancelled`
 - `start.dateTime` is in the future (relative to NOW)
 
-Distinguish carefully:
+Recognised summaries (match the full summary, not a substring):
 
-- `[Hospitality] Grooming` and `[Hospitality] Tech Debt Grooming` are
-  **different** events — match the full summary, not a substring. Only Tech
-  Debt Grooming is audited (Rule C); `[Hospitality] Grooming` is no longer a
-  regular meeting and is ignored (see Rule B, retired).
-- A **planning event** has the exact summary
-  `[Hospitality] Review + Retro + Planning`. Match the full string, not a
-  substring. This is the anchor for Rules A/C/D below.
-- Standup event summary is `[Hospitality] Standup`.
+- `[Hospitality] Standup` — the daily standup.
+- `[Hospitality] Retro + Sizing` — the **retro event**: a retro every second
+  week, extended with an on-demand sizing session. This is the anchor for
+  Rules A/D/E below. There is no separate sizing event to audit.
+- `[Hospitality] Grooming`, `[Hospitality] Tech Debt Grooming` and
+  `[Hospitality] Review + Retro + Planning` are **retired** (2026-10-12).
+  The team no longer attends groomings and planning is gone. Ignore these
+  events: their presence, absence or day is never a violation. Grooming
+  events may still sit on the shared team calendar for other attendees.
+- Any other `[Hospitality]` summary is not audited.
 
 ### Step 3 — Convert times explicitly
 
@@ -107,59 +109,62 @@ trustworthy.
 
 ### Step 4 — Check rules
 
-After conversion, audit against these three rules (A, C, D; B is retired
-and keeps its letter so older logs stay comparable). "Planning event" means
-an event whose summary is exactly `[Hospitality] Review + Retro + Planning`
-(see Step 2).
+After conversion, audit against rules A, D and E. B and C are retired and
+keep their letters so older logs stay comparable. "Retro event" means an
+event whose summary is exactly `[Hospitality] Retro + Sizing` (see Step 2),
+and a "retro day" is a date a retro event falls on.
 
-**Rule A — Standups on every workday except planning days and non-working days.**
+**Rule A — Standups on every workday except retro days and non-working days.**
 
 For each weekday between NOW and NOW+28d:
 
-- If the day is a planning day (a planning event falls on it), there must
-  NOT be a `[Hospitality] Standup` event that day. If there is → violation.
-  This holds **regardless of which weekday the planning event lands on** —
-  if planning was moved to Tue/Wed/Thu/Fri, that day still must have no
-  standup. (The off-Monday placement is separately checked by Rule D, with
-  its own holiday exemption; the two rules are evaluated independently.)
-- If the day is **non-working** per Step 3.5 — a Hungarian national public
-  holiday *or* a government-declared substitute rest day (áthelyezett
-  pihenőnap / bridge day) — the absence of a standup is fine, not a
-  violation. Both count; a bridge day is not a lesser exemption than a
-  public holiday. (The team is based in Hungary and observes Hungarian
-  holidays only; US holidays are irrelevant here.)
+- If the day is a retro day, there must NOT be a `[Hospitality] Standup`
+  event that day. The retro replaces the standup. If there is → violation.
+  This holds regardless of which weekday the retro lands on.
+- If the day is **non-working** per Step 3.5 (a Hungarian national public
+  holiday *or* a substitute rest day / bridge day), the absence of a
+  standup is fine, not a violation. Both count equally. (The team is based
+  in Hungary and observes Hungarian holidays only; US holidays are
+  irrelevant here.)
 - Otherwise, there must be exactly one `[Hospitality] Standup` event that
-  day. If missing → violation.
+  day. If missing or duplicated → violation.
 
-**Rule B — retired 2026-10-07.**
+**Rule B — retired 2026-10-07.** No more regular Thursday Grooming. Never
+emit a `B:` line.
 
-The Hospitality team no longer holds regular Thursday Grooming sessions.
-Do not check for `[Hospitality] Grooming`, and do not report its presence,
-absence or day as a violation. Never emit a `B:` line.
+**Rule C — retired 2026-10-12.** No more Tech Debt Grooming. Never emit a
+`C:` line.
 
-**Rule C — Tech Debt Grooming on the Wednesday before planning.**
+**Rule D — The retro must be on a Monday, except when that Monday is non-working.**
 
-For each planning event:
+Every retro event must land on a Monday in Europe/Budapest, with one
+exception: if the Monday of that retro's ISO week is **non-working** per
+Step 3.5, the retro is deliberately moved to the next workday (typically
+Tuesday) and is NOT a violation. Use the pinned table, do not re-derive
+the holiday list here. If the date is unresolved, follow Step 3.5's
+unresolved handling (note it, don't flag it).
 
-- Compute the Wednesday immediately before that planning date (in
-  Europe/Budapest). A `[Hospitality] Tech Debt Grooming` event must exist on
-  that Wednesday. If missing, on a wrong day, or duplicated → violation.
+**Rule E — Retro every second week.**
 
-**Rule D — Planning must be on a Monday, except when that Monday is a Hungarian public holiday.**
+Retros run on a two-week cadence. Any 28-day window holds exactly two
+retros, in ISO weeks two apart (compare ISO weeks, not dates, so a
+holiday-shifted Tuesday retro still counts for its week).
 
-Every planning event must land on a Monday in Europe/Budapest, with one
-exception: if the Monday of that planning event's calendar week is a
-Hungarian national public holiday, planning is deliberately moved to the
-next workday (typically Tuesday) and is NOT a violation. The team is
-based in Hungary and observes Hungarian holidays only — US/other holidays
-do not count for this exemption.
+- Fewer than two retro events in the window → violation (`missing retro`,
+  name the ISO week where one is expected if you can infer it from the
+  other).
+- More than one retro in the same ISO week, or two retros in adjacent ISO
+  weeks → violation.
 
-To evaluate: take the planning event's date in Europe/Budapest, find that
-ISO week's Monday, and check whether that Monday is **non-working** per
-Step 3.5 — use the pinned table, do not re-derive the holiday list here.
-If yes → no Rule D violation. If no → planning on any non-Monday is a
-Rule D violation. If the date is unresolved, follow Step 3.5's unresolved
-handling (note it, don't flag it).
+**If the window holds no retro event at all**, the likely cause is a
+rename, not a cancelled sprint (that is how the 2026-10-12 run went
+wrong). Before reporting, run a second `list_events` over the same window
+with `fullText: "Retro"` and look for an event that took the retro's slot.
+Then report **one** line, `E: no "[Hospitality] Retro + Sizing" event in
+the window`, naming any candidate rename (summary, dates, series id). In
+that case do **not** also emit Rule A "missing standup" lines for Mondays:
+without the anchor you cannot tell a retro day from a normal Monday.
+Evaluate Rule A normally for Tuesday to Friday.
 
 ### Step 5 — Write the log
 
@@ -270,15 +275,18 @@ The audit is read-only (no PRE-AUTHORIZED actions needed) — it only calls
 (`create_event`, `update_event`) are NOT permitted by this task; if a
 violation seems easy to auto-fix, still just report it.
 
-Why these rules exist: Sprint Planning supersedes Standup, so we hold the
-standup. The Wednesday before is when engineering grooms the tech debt
-backlog. Until 2026-10-07 there was also product grooming on the Thursday
-before (old Rule B); the team dropped it as a regular meeting.
-Violations usually mean someone moved a meeting and broke the rhythm.
+Why these rules exist (scrum process as of 2026-10-12): HSP keeps only
+two meetings. A daily standup, and a retro every second week extended with
+an on-demand sizing session. The retro sits in the standup slot (Monday
+11:00) and replaces that day's standup. Grooming (product and tech debt)
+and sprint planning are gone. Violations usually mean someone moved a
+meeting and broke the rhythm.
 
-Calendar event differences worth knowing:
-- `[Hospitality] Grooming` — product/story grooming. No longer a regular
-  Thursday meeting as of 2026-10-07; not audited.
-- `[Hospitality] Tech Debt Grooming` — engineering tech debt grooming,
-  Wednesdays. Still audited by Rule C.
-- Different events with different attendee sets. Don't conflate.
+History:
+- Until 2026-10-07 there was product grooming on the Thursday before
+  planning (old Rule B).
+- Until 2026-10-12 the anchor was `[Hospitality] Review + Retro + Planning`
+  (13:00 on alternate Mondays), with Tech Debt Grooming on the Wednesday
+  before it (old Rule C). The planning series was renamed to
+  `[Hospitality] Retro + Sizing` (series `n8epse96duk51t5agtpsao1mko`) and
+  moved into the standup slot.
