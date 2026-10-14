@@ -175,6 +175,12 @@ Tools: `shared-kasa-mongocli`, `shared-kasa-datadog-logs`,
 `gh` or `git show origin/master:…`. Datadog keeps 14 days, so use
 CloudWatch for anything older.
 
+**Scratch files** (query bodies, saved API responses): create one folder
+per run with `SCRATCH=$(mktemp -d -t hospitality-bug-triage)` and keep
+every temporary file in it. Don't write to a fixed path like `/tmp/<key>`,
+where runs would collide or reuse stale files. Never put scratch files in
+`logs/`, `tasks/` or a repo.
+
 **AWS credentials**: this spawned process may inherit short-lived STS env
 vars that shadow the SSO profile and expire mid-run. Run every AWS-backed
 command as `env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u
