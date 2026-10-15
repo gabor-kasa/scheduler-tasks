@@ -25,7 +25,8 @@ Nothing else in Jira: no comments, no transitions, no field edits, no label remo
 If a label PUT fails, record the failure in the ledger and do not retry with notifications on.
 
 Jira access goes through the `shared-kasa-jira` skill's auth (`source ~/.claude/skills/shared-kasa-jira/scripts/auth.sh`).
-Never use an Atlassian MCP tool.
+`$AUTH` is the bare base64 value, so the header is `Authorization: Basic $AUTH`. Without "Basic", Jira answers
+"Issue does not exist" rather than an auth error. Never use an Atlassian MCP tool.
 
 ### 1. Pick the batch
 
@@ -72,6 +73,14 @@ Repos in scope are the HSP-owned ones in `reports/hsp-backlog-obsolescence/defau
    `partial`, not `implemented`.
 7. **Date what you found** with `git log -S <identifier> origin/<default>`. Record the commit, the date and the PR number.
 8. Directory layouts differ per repo (kontrol-api is `service/app`, not `src`). Search the whole repo first, then narrow.
+   Start broad searches with `-l` (file names only) plus path globs. A full-content broad grep ran to 220KB once.
+9. **If the ticket names a repo outside `default-branches.tsv`** (for example airbnb-sync or airbnb-api), check
+   `gh repo view kasadev/<repo> --json isArchived,pushedAt` first. An archived repo or a disabled service is
+   strong superseded evidence (HSP-224). Read its files with `gh api repos/kasadev/<repo>/contents/<path>?ref=<branch>`.
+10. **Tickets from one feature** (siblings under one parent, such as HSP-277 to 281) may share one investigation.
+    Each ticket still gets its own file and verdict, but the files may point to a shared section in the first one.
+11. Check what the ticket's own comments decided. A comment like "merge it into Giga Search" (HSP-9) tells you
+    where to look for the replacement.
 
 ### 4. Epics
 
@@ -96,9 +105,10 @@ The hard rule is that only positive evidence earns `obsolete`. "I didn't find it
 
 For each ticket, write `reports/hsp-backlog-obsolescence/tickets/<KEY>.md` in the format of the existing ones:
 verdict, label, confidence, checked date, Jira state before the write, Claim, Evidence (`repo` @ short SHA with
-`path:line`), and Note for review. Append one JSON line to `ledger.jsonl`. Then apply the label and read it back.
-Then regenerate `REVIEW.md`: one table grouped by label (obsolete first), with key, summary, verdict, a one-line
-reason and a link to the ticket file.
+`path:line`), and Note for review. Append one JSON line to `ledger.jsonl` (`key`, `verdict`, `label`, `confidence`, `jira_updated_before`, `checked`,
+`evidence[]`, `by`). Then apply the label, read it back, and add `label_put_http` and `label_readback` to the line.
+Then run `python3 -I scripts/hsp-review-gen.py` to regenerate `REVIEW.md`. Never edit `REVIEW.md` by hand. Human
+verdicts (`human_verdict`) and verifications (`verified_by`) are separate ledger lines, and the generator applies them.
 
 Commit `reports/hsp-backlog-obsolescence/` to this repo's master (this folder's own rule). Don't push.
 
