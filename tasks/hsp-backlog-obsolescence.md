@@ -118,6 +118,11 @@ Commit `reports/hsp-backlog-obsolescence/` to this repo's master (this folder's 
 - Pilot (by hand, 2026-10-15), 6 tickets: HSP-286 not-implemented, HSP-285 not-implemented, HSP-578 unclear,
   HSP-282 not-implemented, HSP-579 obsolete (superseded), HSP-521 unclear (partial). Each took about 8 to 15 tool
   calls. That is why the batch is 5.
+- Gabor's verdicts on the pilot (2026-10-15), also logged in `ledger.jsonl` as `human_verdict` lines:
+  HSP-579 obsolete (agrees), HSP-285 obsolete (the code check said not-implemented), HSP-578 obsolete (the code
+  check said unclear; product call), HSP-286 unclear (the code check said not-implemented), HSP-521 pending Adam
+  (90% obsolete). So far, code agreed outright on 1 of 5. `not-implemented` only means nothing was found on
+  master. It does not mean the ticket is still wanted, and Adam still has to review those tickets.
 - `kontrol-ui-device-dashboard-nav` is a second clone of kontrol-ui and `access-review` has no remote. Both are
   marked `no-remote` in `default-branches.tsv` and skipped.
 - ctf-netlify-deploy-app's default branch is `dev`. Always take the default from the tsv, never assume `master`.

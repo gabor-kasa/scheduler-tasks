@@ -4,3 +4,8 @@
 {"key":"HSP-282","verdict":"not-implemented","label":"backlog-review-not-implemented","confidence":"high","jira_updated_before":"2025-01-08","checked":"2026-10-15","by":"manual-pilot"}
 {"key":"HSP-579","verdict":"superseded","label":"backlog-review-obsolete","resolution":"Obsolete","confidence":"high","jira_updated_before":"2025-01-08","checked":"2026-10-15","by":"manual-pilot"}
 {"key":"HSP-521","verdict":"partial","label":"backlog-review-unclear","confidence":"medium","jira_updated_before":"2024-03-25","checked":"2026-10-15","by":"manual-pilot"}
+{"key":"HSP-579","human_verdict":"obsolete","by":"gabor","date":"2026-10-15","agrees":true}
+{"key":"HSP-285","human_verdict":"obsolete","by":"gabor","date":"2026-10-15","agrees":false,"machine":"not-implemented","reason":"pending: ask Gabor"}
+{"key":"HSP-578","human_verdict":"obsolete","by":"gabor","date":"2026-10-15","agrees":"partial","machine":"unclear","reason":"product call: hidden-but-manually-bookable case not needed"}
+{"key":"HSP-286","human_verdict":"unclear","by":"gabor","date":"2026-10-15","agrees":false,"machine":"not-implemented"}
+{"key":"HSP-521","human_verdict":"pending-adam","by":"gabor","date":"2026-10-15","note":"90% obsolete per Gabor"}
