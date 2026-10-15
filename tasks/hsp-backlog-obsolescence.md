@@ -33,14 +33,16 @@ Jira access goes through the `shared-kasa-jira` skill's auth (`source ~/.claude/
 The scope query, re-run every time:
 
 ```
-project = HSP AND statusCategory != Done AND issuetype != "Tech Debt"
-AND (sprint = 543 OR sprint is EMPTY) AND issuetype != Epic
+project = HSP AND statusCategory != Done AND issuetype not in ("Tech Debt", Epic)
+AND (sprint in (543, 874) OR sprint is EMPTY OR sprint not in (openSprints(), futureSprints()))
 AND (labels is EMPTY OR labels not in (backlog-review-obsolete, backlog-review-not-implemented, backlog-review-unclear))
 ORDER BY created ASC
 ```
 
-Sprint 543 is "Hospitality Incoming Items". `sprint is EMPTY` is the board backlog. Epics are out of scope
-(Gabor, 2026-10-15). Take the first **5** tickets. Also skip any key already in `ledger.jsonl` (a failed label write leaves no label).
+Sprint 543 is "Hospitality Incoming Items" and 874 is "Deep space". `sprint is EMPTY OR sprint not in (open,
+future)` is the board 48 backlog view. The second half catches tickets left over from closed sprints, which
+`sprint is EMPTY` alone misses (6 of them on 2026-10-15). Reconciled key by key against the board: 220 = 220.
+Epics are out of scope (Gabor, 2026-10-15). Take the first **5** tickets. Also skip any key already in `ledger.jsonl` (a failed label write leaves no label).
 
 If the query returns nothing, the review is complete. Write the Outcome with
 Severity `attention`, add a Notification "HSP backlog review complete", and stop.
@@ -120,7 +122,7 @@ Commit `reports/hsp-backlog-obsolescence/` to this repo's master (this folder's 
 - Requested by Adam Kiss (Product Lead): find HSP backlog tickets that are already implemented or will never be
   done because we solved it another way. Gabor agreed the plan on 2026-10-15. Labels hold the result, and
   the reasoning stays local. No Jira comments.
-- Scope on 2026-10-15: 210 open HSP tickets (backlog plus Incoming Items), excluding Tech Debt and Epics.
+- Scope on 2026-10-15 (evening): 220 open HSP tickets (backlog plus Incoming Items plus Deep space), excluding Tech Debt and Epics.
 - Pilot (by hand, 2026-10-15), 6 tickets: HSP-286 not-implemented, HSP-285 not-implemented, HSP-578 unclear,
   HSP-282 not-implemented, HSP-579 obsolete (superseded), HSP-521 unclear (partial). Each took about 8 to 15 tool
   calls. That is why the batch is 5.
