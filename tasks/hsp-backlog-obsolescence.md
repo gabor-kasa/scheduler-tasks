@@ -39,10 +39,10 @@ AND (labels is EMPTY OR labels not in (backlog-review-obsolete, backlog-review-n
 ORDER BY created ASC
 ```
 
-Sprint 543 is "Hospitality Incoming Items". `sprint is EMPTY` is the board backlog. Epics are excluded here and
-handled in step 4. Take the first **5** tickets. Also skip any key already in `ledger.jsonl` (a failed label write leaves no label).
+Sprint 543 is "Hospitality Incoming Items". `sprint is EMPTY` is the board backlog. Epics are out of scope
+(Gabor, 2026-10-15). Take the first **5** tickets. Also skip any key already in `ledger.jsonl` (a failed label write leaves no label).
 
-If the query returns nothing and there are no unchecked epics, the review is complete. Write the Outcome with
+If the query returns nothing, the review is complete. Write the Outcome with
 Severity `attention`, add a Notification "HSP backlog review complete", and stop.
 
 ### 2. Read each ticket
@@ -79,16 +79,14 @@ Repos in scope are the HSP-owned ones in `reports/hsp-backlog-obsolescence/defau
    strong superseded evidence (HSP-224). Read its files with `gh api repos/kasadev/<repo>/contents/<path>?ref=<branch>`.
 10. **Tickets from one feature** (siblings under one parent, such as HSP-277 to 281) may share one investigation.
     Each ticket still gets its own file and verdict, but the files may point to a shared section in the first one.
-11. Check what the ticket's own comments decided. A comment like "merge it into Giga Search" (HSP-9) tells you
+11. **Check that the ticket's premise still holds, not just its solution.** HSP-285 asked code audit to clean up
+    custom codes that CSS didn't know about. Code audit still doesn't remove them, but all codes are now set
+    through CSS, so the unknown codes no longer appear and the ticket is obsolete. Read the "Why" and ask whether
+    that problem can still happen on master. If it can't, the verdict is superseded, even when the "How" was never built.
+12. Check what the ticket's own comments decided. A comment like "merge it into Giga Search" (HSP-9) tells you
     where to look for the replacement.
 
-### 4. Epics
-
-An epic gets `backlog-review-obsolete` if all of its children are Done or already labelled
-`backlog-review-obsolete`. Otherwise it gets `backlog-review-unclear`. No code reading. Process epics only after the
-non-epic query returns nothing.
-
-### 5. Verdict to label
+### 4. Verdict to label
 
 | Verdict | Label | Requires |
 |---|---|---|
@@ -101,7 +99,7 @@ non-epic query returns nothing.
 
 The hard rule is that only positive evidence earns `obsolete`. "I didn't find it" is `not-implemented`, never `obsolete`.
 
-### 6. Record
+### 5. Record
 
 For each ticket, write `reports/hsp-backlog-obsolescence/tickets/<KEY>.md` in the format of the existing ones:
 verdict, label, confidence, checked date, Jira state before the write, Claim, Evidence (`repo` @ short SHA with
@@ -112,7 +110,7 @@ verdicts (`human_verdict`) and verifications (`verified_by`) are separate ledger
 
 Commit `reports/hsp-backlog-obsolescence/` to this repo's master (this folder's own rule). Don't push.
 
-### 7. Outcome
+### 6. Outcome
 
 - Severity `attention` if the batch added any `backlog-review-obsolete`. Otherwise `ok`.
 - In the Summary, give counts per label for this batch and in total, plus the remaining scope count.
@@ -122,9 +120,7 @@ Commit `reports/hsp-backlog-obsolescence/` to this repo's master (this folder's 
 - Requested by Adam Kiss (Product Lead): find HSP backlog tickets that are already implemented or will never be
   done because we solved it another way. Gabor agreed the plan on 2026-10-15. Labels hold the result, and
   the reasoning stays local. No Jira comments.
-- Scope on 2026-10-15: 257 open HSP tickets (backlog plus Incoming Items) excluding Tech Debt, 47 of them epics.
-  The 61 sprintless HSP epics hidden from the board backlog view are in the query above via `sprint is EMPTY`.
-  Confirm with Gabor whether those are wanted.
+- Scope on 2026-10-15: 210 open HSP tickets (backlog plus Incoming Items), excluding Tech Debt and Epics.
 - Pilot (by hand, 2026-10-15), 6 tickets: HSP-286 not-implemented, HSP-285 not-implemented, HSP-578 unclear,
   HSP-282 not-implemented, HSP-579 obsolete (superseded), HSP-521 unclear (partial). Each took about 8 to 15 tool
   calls. That is why the batch is 5.

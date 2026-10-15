@@ -12,7 +12,7 @@ Jira filter: `labels in (backlog-review-obsolete, backlog-review-not-implemented
 |---|---|---|---|
 | [HSP-9](tickets/HSP-9.md) | Email search is broken | superseded ✓ verified | I read the analyzer config. |
 | [HSP-224](tickets/HSP-224.md) | Rotate basic auth in airbnb-sync | superseded ✓ verified | Safe to close. |
-| [HSP-285](tickets/HSP-285.md) | CSS CodeAudit should handle custom codes with codeId references | not-implemented → Gabor: obsolete | The figures in the ticket (about 580 removed custom codes, about 560 `not_set`) are from 2022. |
+| [HSP-285](tickets/HSP-285.md) | CSS CodeAudit should handle custom codes with codeId references | not-implemented → Gabor: obsolete (premise gone: all codes are now set through CSS, so no unknown custom codes; code audit still does not remove codes) | The figures in the ticket (about 580 removed custom codes, about 560 `not_set`) are from 2022. |
 | [HSP-578](tickets/HSP-578.md) | Allow usage of archived Contentful entries for checkout page | unclear → Gabor: obsolete | Hiding a property from the website is solved. |
 | [HSP-579](tickets/HSP-579.md) | Add "Successfully Updated/Selected Card" verbiage to CCA Page | superseded → Gabor: obsolete | HELP-174 is still open and linked to this ticket. |
 
