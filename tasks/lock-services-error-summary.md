@@ -1,7 +1,7 @@
 ---
 id: lock-services-error-summary
 icon: lock.shield
-title: Morning Datadog error summary for lock-related services
+title: Morning error summary for lock-related services
 type: recurring
 schedule: "0 7 * * 1-5"
 created: 2026-05-11T17:00:00+02:00
@@ -10,22 +10,46 @@ status: active
 
 ## Instructions
 
-Summarize Datadog errors from the last 24 hours for the lock-related
-services I watch. Use the `shared-kasa-datadog-logs` skill.
+Summarize errors from the last 24 hours for the lock-related services I
+watch, from CloudWatch Logs. Datadog is being phased out; do not query it.
 
-### Step 1 — Query Datadog
+### Step 1 — Query CloudWatch
 
-Run a logs search with:
+Fix the window first: `END` = now rounded down to the minute, `START` =
+END minus 24h, both in UTC (`2026-10-16T05:01:00Z`). Use the same pair for
+every query this run, so batches cannot drift apart.
 
-- Query string (verbatim):
-  ```
-  @level:error service:(seam-sync OR css-api OR code-setting-service-production-* OR code-setting-service-production* OR smartthings-sync-production* OR remotelock-sync-production* OR salto-sync-production* OR device-service-*)
-  ```
-- Time range: `now-24h` → `now`
-- Source view (for reference): saved view ID `4015487` in Datadog
-  (https://app.datadoghq.com/logs?saved-view-id=4015487)
+Run the helper (it lives in this repo):
 
-If the skill / API call fails, set `Severity: failure` and `Status: failure`
+```
+python3 -I scripts/lock-errors-cw.py --start <START> --end <END> --out <scratch>/rows.json
+```
+
+It discovers the log groups by prefix (css-api and seam-sync app/worker
+groups in production and dev, plus the production Lambda groups of
+code-setting-service, smartthings-sync, remotelock-sync, salto-sync and
+device-service, plus the device-service dev Lambdas), runs one Logs
+Insights query per batch of at most 50 groups, and writes one row per
+(log group, message): `family, log_group, message, n, first, last,
+sample, account`. `first`/`last` are UTC. stderr prints the group count,
+each batch's bytes scanned and cost, and per-family totals. Expect about
+125 groups, 3 batches, roughly 1.3 GB and $0.01.
+
+The helper already strips exported `AWS_*` credentials and uses the SSO
+profile. If it exits non-zero, or prints an `error:` line for any batch,
+take the failure branch below: a partial result would read as a DROP
+tomorrow. If the SSO session itself has expired, run the
+`shared-kasa-aws-auto-login` skill once and retry the helper; if that
+still fails, take the failure branch and quote the error.
+
+Optional drill-down: for a NEW or SPIKE key you may run one extra query
+through `~/.claude/skills/shared-kasa-cloudwatch-logs/scripts/insights.py`
+on that key's log groups only (`filter level = "error" and message =
+"<key>" | stats count() by <field>`), to give a breakdown by account or
+error text. Never pass `--yes`; if it exits 3 (over the cost gate), skip
+the drill-down and say so in Execution.
+
+If the helper or the AWS call fails, set `Severity: failure` and `Status: failure`
 in the Outcome and log the error reason. Do not silently skip.
 
 **Scope of the Execution section.** Record what you did: the queries you
@@ -36,25 +60,28 @@ skill's documentation into the conversation as plain text, worked bash
 examples included. That is how skills work.
 
 This task defines four tags and no others: NEW, SPIKE, DROP, REPEAT, all
-from Step 2.5. The Report, Outcome, and Notification carry Datadog
+from Step 2.5. The Report, Outcome, and Notification carry CloudWatch
 findings only, and severity comes from Step 4's counts, nothing else. If
 the skill or the API genuinely fails, say so through the failure branch
 above and quote the error the call returned.
 
 ### Step 2 — Aggregate
 
-Group the matching logs by `service`, and within each service group by a
-normalized error key (error class + first line of message, ~120 chars).
-Drop request IDs, UUIDs, timestamps, and other high-cardinality bits when
-building the key so similar errors collapse.
+Group the rows by `family` (that is the service name the reports use:
+`css-api`, `seam-sync`, `smartthings-sync-production`, ...), and within
+each family by a normalized error key: the `message` field, lowercased,
+with request IDs, UUIDs, ObjectIds and timestamps stripped. Sum `n`
+across log groups, take the earliest `first` and latest `last`. For
+css-api and seam-sync, say the prod/dev split (from `log_group`) on the
+bullet, as the Datadog-era reports did.
 
 For each (service, error key) bucket, capture:
 
 - count
 - first seen / last seen (in Europe/Budapest)
-- one representative log message (truncate to 500 chars)
-- a Datadog link scoped to that service + the 24h window if easy to
-  construct; otherwise just include the service name
+- one representative log message: `sample` (the error text), with
+  `account` when present; truncate to 500 chars. When `sample` is empty
+  write `no error message on the log line`.
 
 ### Step 2.5 — Diff against prior reports
 
@@ -196,7 +223,7 @@ In the Outcome:
 
 - 0 errors → `Severity: ok`, `Status: success`
 - ≥ 1 error → `Severity: attention`, `Status: success`
-- Datadog query failed → `Severity: failure`, `Status: failure`
+- CloudWatch query failed → `Severity: failure`, `Status: failure`
 
 DROP neither raises nor lowers severity. It is a line in the report, not
 an alert.
@@ -228,11 +255,19 @@ Skip the block on clean runs (silence = success).
 
 This is a morning health check for the lock-management service cluster:
 `seam-sync`, `css-api`, `code-setting-service-*`, `smartthings-sync-*`,
-`remotelock-sync-*`, `salto-sync-*`, `device-service-*`. The query matches
-the Datadog saved view I use manually (ID `4015487`).
+`remotelock-sync-*`, `salto-sync-*`, `device-service-*`.
 
-Read-only — no PRE-AUTHORIZED mutations. The task only queries Datadog
-and writes to a local log file.
+Moved from Datadog to CloudWatch on 2026-10-16. A parity run on the
+window 2026-10-15T05:01:21Z to 2026-10-16T05:01:21Z returned 4,629 errors
+in CloudWatch against Datadog's 4,638. Six services matched exactly. The
+gap was salto-sync `retrying_on_rate_limit` (9×): the service logs it at
+`level: warn`, which Datadog counted as an error and CloudWatch does
+not. So that key disappears from the reports; its baseline median is
+under 50, so it produces no DROP line. Error keys were otherwise
+identical, so the Datadog-era logs remain a valid baseline.
+
+Read-only — no PRE-AUTHORIZED mutations. The task only queries
+CloudWatch Logs and writes to a local log file.
 
 The 24h lookback covers the previous workday plus the overnight window,
 so Monday's run also catches weekend errors.
