@@ -1,6 +1,6 @@
 # Email forwarder (Apps Script)
 
-Forwards the email-forwarder rules from inside Google, daily at 06:00, under your own
+Forwards the email-forwarder rules from inside Google, every 4 hours, under your own
 account. It replaced the `email-forwarder` scheduled task on 2026-10-21,
 because Claude's Gmail connector now requires approval for each `forward` call,
 so a scheduled `claude -p` run can't send.
@@ -13,13 +13,13 @@ so a scheduled `claude -p` run can't send.
 4. Run `dryRun` once. Approve the OAuth prompt. The execution log lists what
    each rule would forward. Nothing is sent.
 5. If the list looks right, run `installTrigger` once. From then on
-   `forwardMatching` runs once a day in the 06:00 hour.
+   `forwardMatching` runs every 4 hours.
 
 A failed run (cap hit, label failure, Gmail error) emails you the stack trace
 through Apps Script's default failure notifications.
 
 Installed 2026-10-21 as project "Email forwarder" (`.clasp.json` holds its
-id), with a daily 06:00 trigger on `forwardMatching`.
+id), with a 4-hourly trigger on `forwardMatching`.
 
 ## Changing a rule
 

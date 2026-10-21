@@ -86,13 +86,12 @@ function resolveLabelIds_() {
   return ids;
 }
 
-// Run once by hand to install the daily trigger. Apps Script fires somewhere
-// in the 06:00 hour (manifest time zone).
+// Run once by hand to install the trigger: every 4 hours.
 function installTrigger() {
   ScriptApp.getProjectTriggers()
     .filter((t) => t.getHandlerFunction() === 'forwardMatching')
     .forEach((t) => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('forwardMatching').timeBased().everyDays(1).atHour(6).create();
+  ScriptApp.newTrigger('forwardMatching').timeBased().everyHours(4).create();
 }
 
 // Lists what would be forwarded without sending anything.
