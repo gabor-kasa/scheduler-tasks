@@ -86,12 +86,14 @@ function resolveLabelIds_() {
   return ids;
 }
 
-// Run once by hand to install the hourly trigger.
+// Run once by hand to install the daily trigger. Apps Script fires somewhere
+// in the 06:00 hour (manifest time zone), so it finishes before the Claude task
+// at 07:05, which then finds everything labeled.
 function installTrigger() {
   ScriptApp.getProjectTriggers()
     .filter((t) => t.getHandlerFunction() === 'forwardMatching')
     .forEach((t) => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('forwardMatching').timeBased().everyHours(1).create();
+  ScriptApp.newTrigger('forwardMatching').timeBased().everyDays(1).atHour(6).create();
 }
 
 // Lists what would be forwarded without sending anything.
