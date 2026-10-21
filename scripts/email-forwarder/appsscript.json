@@ -1,0 +1,17 @@
+{
+  "timeZone": "Europe/Budapest",
+  "runtimeVersion": "V8",
+  "exceptionLogging": "STACKDRIVER",
+  "dependencies": {
+    "enabledAdvancedServices": [
+      { "userSymbol": "Gmail", "serviceId": "gmail", "version": "v1" }
+    ]
+  },
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.labels",
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/script.scriptapp"
+  ]
+}
