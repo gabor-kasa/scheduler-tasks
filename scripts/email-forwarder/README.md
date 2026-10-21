@@ -18,7 +18,15 @@ dedup labels match `tasks/email-forwarder.md`.
 A failed run (cap hit, label failure, Gmail error) emails you the stack trace
 through Apps Script's default failure notifications.
 
+Installed 2026-10-21 as project "Email forwarder" (`.clasp.json` holds its
+id), with the hourly trigger on `forwardMatching`.
+
 ## Changing a rule
 
-Edit `RULES` here and in the editor, and keep `tasks/email-forwarder.md` in
-sync while that task still exists.
+Edit `RULES` in `Code.gs`, then push from this folder:
+
+```
+npx -y @google/clasp@3.4.1 push -f
+```
+
+Keep `tasks/email-forwarder.md` in sync while that task still exists.
