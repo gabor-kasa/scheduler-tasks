@@ -1,9 +1,9 @@
 // Forward matching Gmail messages, once each. Runs inside Google Apps Script on
-// a time trigger, replacing the forward step of tasks/email-forwarder.md (Claude's
-// Gmail connector now requires per-call approval, so headless runs can't forward).
+// a time trigger. It replaced the email-forwarder scheduled task, because Claude's
+// Gmail connector now requires per-call approval, so headless runs can't forward.
 //
-// Same rules and dedup labels as the task, so the two can overlap safely: a
-// message carrying a rule's label is never forwarded again by either.
+// A message carrying a rule's label is never forwarded again. The label lives on
+// the message in Gmail, so it is the record of what was sent.
 //
 // Setup: see README.md in this folder.
 
@@ -87,8 +87,7 @@ function resolveLabelIds_() {
 }
 
 // Run once by hand to install the daily trigger. Apps Script fires somewhere
-// in the 06:00 hour (manifest time zone), so it finishes before the Claude task
-// at 07:05, which then finds everything labeled.
+// in the 06:00 hour (manifest time zone).
 function installTrigger() {
   ScriptApp.getProjectTriggers()
     .filter((t) => t.getHandlerFunction() === 'forwardMatching')

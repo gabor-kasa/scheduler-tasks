@@ -1,9 +1,9 @@
 # Email forwarder (Apps Script)
 
 Forwards the email-forwarder rules from inside Google, daily at 06:00, under your own
-account. It exists because Claude's Gmail connector now requires approval for
-each `forward` call, so the scheduled `claude -p` run can't send. The rules and
-dedup labels match `tasks/email-forwarder.md`.
+account. It replaced the `email-forwarder` scheduled task on 2026-10-21,
+because Claude's Gmail connector now requires approval for each `forward` call,
+so a scheduled `claude -p` run can't send.
 
 ## Setup
 
@@ -29,4 +29,5 @@ Edit `RULES` in `Code.gs`, then push from this folder:
 npx -y @google/clasp@3.4.1 push -f
 ```
 
-Keep `tasks/email-forwarder.md` in sync while that task still exists.
+Rule 2's `has:attachment` also fires on some signature logos. If Niveus mail
+starts forwarding with only an image attachment, tighten it to `filename:pdf`.
